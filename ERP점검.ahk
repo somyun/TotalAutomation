@@ -234,7 +234,7 @@ class ERP점검 {
             return
         }
 
-        loop 15 { ; SAP 진입 대기 (약 15초)
+        loop 150 { ; SAP 진입 대기 (약 15초)
             Sleep 100
 
             ; 1. SAP GUI 보안 경고 처리
@@ -250,10 +250,11 @@ class ERP점검 {
             login_hwnd := WinExist("작업완료보고 ahk_class #32770")
             if login_hwnd and chk2 {
                 cUIA := UIA.ElementFromHandle(login_hwnd)
-                cUIA.FindElement({AutomationId:"1004"}).value := uID
-                cUIA.FindElement({AutomationId:"1005"}).value := uPW
-                cUIA.FindElement({AutomationId:"1"}).Invoke()
+                cUIA.FindElement({ AutomationId: "1004" }).value := uID
+                cUIA.FindElement({ AutomationId: "1005" }).value := uPW
+                cUIA.FindElement({ AutomationId: "1" }).Invoke()
                 Sleep 250
+                chk1 := false
                 chk2 := false
             }
 
@@ -265,6 +266,8 @@ class ERP점검 {
                 Send "{Tab}"
                 Send "{Raw}" . uPW
                 Send "{Left}{Enter}"
+                chk1 := false
+                chk2 := false
                 chk3 := false
             }
 
@@ -288,7 +291,7 @@ class ERP점검 {
                 break ; 루프 탈출 -> 다음 단계
             }
 
-            if (A_Index == 15) {
+            if (A_Index == 150) {
                 MsgBox("시간초과: SAP 실행 실패", "오류", "iconx")
                 return
             }
@@ -409,6 +412,9 @@ class ERP점검 {
     ; --------------------------------------------------------------------------
     ; Polling Logic
     ; --------------------------------------------------------------------------
+
+    static IsPolling := false
+
     static StartPolling() {
         ; 1분마다 상태 갱신 요청
         SetTimer () => ERP점검.RequestStatus(), 60000
@@ -417,8 +423,15 @@ class ERP점검 {
     }
 
     static RequestStatus() {
-        global WebAppURL
 
+        ; 폴링 중복 방지
+        if (this.IsPolling) {
+            return
+        }
+
+        this.IsPolling := true
+
+        global WebAppURL
         url := WebAppURL . "?action=getFormList"
         tempFile := A_ScriptDir . "\erp_status_temp.json"
 
@@ -436,6 +449,7 @@ class ERP점검 {
             Run cmd, , "Hide"
         } catch {
             ; curl 실행 실패 시 (경로 문제 등) silent 하게 넘어갑니다.
+            this.IsPolling := false
             return
         }
 
@@ -460,13 +474,15 @@ class ERP점검 {
 
         ERP점검.CheckCount += 1
 
-        ; 타임아웃 처리 (약 20초 = 100회)
-        if (ERP점검.CheckCount > 100) {
+        ; 타임아웃 처리 (약 10초 = 50회)
+        if (ERP점검.CheckCount > 50) {
             if (ERP점검.TimerCallback)
                 SetTimer ERP점검.TimerCallback, 0 ; 타이머 중지
 
             if FileExist(tempFile)
                 try FileDelete tempFile
+
+            this.IsPolling := false
             return
         }
 
@@ -487,6 +503,9 @@ class ERP점검 {
                 SetTimer ERP점검.TimerCallback, 0 ; 타이머 중지
 
             try FileDelete tempFile
+
+            ; 폴링 상태 해제
+            this.IsPolling := false
 
             global wv
             statusMap := Map()
@@ -561,7 +580,7 @@ GetCaretPos(&X, &Y, &W, &H) {
         	but in reality is not. The only downside to using GetSelections is that when text
         	is selected then caret position is ambiguous. Nevertheless, in those cases it most
         	likely doesn't matter much whether the caret is in the beginning or end of the selection.
-
+        
         	If GetCaretRange is needed then the following code implements that:
         	ComCall(16, FocusedEl, "int", 10024, "ptr*", &patternObject:=0), ObjRelease(FocusedEl) ; GetCurrentPattern. TextPattern2 = 10024
         	if patternObject {

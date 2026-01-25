@@ -6,29 +6,16 @@ RunVehicleLog(data) {
     if !data
         return
 
-    carType := "타워모터카"
-    bunso := "호포전기분소"
-
     ; --- 1. 브라우저/로그인 확인 ---
-
-    ; Main.ahk에서 ShowLoadingGUI로 로딩화면은 이미 표시됨.
-
-    ; 업무일지 오픈 여부 확인 (차량운행일지는 업무일지와 충돌 가능성 체크)
-    ; 여기서는 단순하게 "부산교통공사 -" 창이 2개 이상이면 경고하거나,
-    ; 이미 열려있는지 체크하는 간단한 로직으로 대체 또는 생략.
-    ; 기존 Legacy workLogExist() 로직이 복잡하므로 일단 생략하고 진행.
-
-    ; ERP 창 활성화
-    if !WinExist("부산교통공사 -") {
-        MsgBox("ERP(부산교통공사) 창을 찾을 수 없습니다. 로그인 후 실행해주세요.")
+    if !cUIA := WebAutoLogin.EnsureReady("WorkLog_View") {
+        MsgBox "cUIA 반환 실패"
         return
     }
-    WinActivate "부산교통공사 -"
+    else
+        thisId := cUIA.BrowserId
 
-    menuClick("분야업무")
-
-    thisId := WinExist("A")
-    cUIA := UIA_Browser(thisId)
+    ; 메뉴 클릭
+    menuClick(cUIA, "분야업무")
 
     ; "추가 조회 삭제" 등의 메뉴에서 "btnReg" (등록/추가) 버튼 클릭
     try {
@@ -48,91 +35,90 @@ RunVehicleLog(data) {
 
     ; --- 2. 입력 로직 실행 ---
 
-	;차량번호 선택창
-	cUIA.WaitElement({Type:"Image", Name:"차량번호"},3000).Invoke()
+    ;차량번호 선택창
+    cUIA.WaitElement({ Type: "Image", Name: "차량번호" }, 3000).Invoke()
 
-	if !WinWaitNotActive(carPage,,5){
+    if !WinWaitNotActive(carPage, , 5) {
         MsgBox("차량선택 페이지 오픈 실패 Timeout")
-		ExitApp
-	}
+        ExitApp
+    }
 
-	cUIA_Sub := UIA_Browser(WinExist("A"))
+    cUIA_Sub := UIA_Browser(WinExist("A"))
 
     ; 차량번호 선택
     try
-        cUIA_Sub.WaitElement({ LocalizedType: "텍스트", Name: carType, mm: 2 }, 35000).ControlClick()
+        cUIA_Sub.WaitElement({ LocalizedType: "텍스트", OR: [{ Name: "타워모터카", mm: 2 }, { Name: "하이브리드모터카", mm: 2 }] },
+        35000).ControlClick()
 
-	;사용작업장 선택창
-	cUIA.WaitElement({Type:"Image", Name:"작업장"},3000,,index:=2).Invoke()
+    ;사용작업장 선택창
+    cUIA.WaitElement({ Type: "Image", Name: "작업장" }, 3000, , index := 2).Invoke()
 
-	if !WinWaitNotActive(carPage,,5){
+    if !WinWaitNotActive(carPage, , 5) {
         MsgBox("작업장 페이지 오픈 실패 Timeout")
-		ExitApp
-	}
+        ExitApp
+    }
 
-	cUIA_Sub := UIA_Browser(WinExist("A"))
+    cUIA_Sub := UIA_Browser(WinExist("A"))
 
-	;사용작업장
-	namebox := cUIA_sub.FindElement({AutomationId:"I_KTEXT"})
-	namebox.value := bunso
-	namebox.SetFocus()
-	Sleep 250
-	cUIA_Sub.send "{enter}"
-	Sleep 250
+    ;사용작업장
+    namebox := cUIA_sub.FindElement({ AutomationId: "I_KTEXT" })
+    namebox.value := data["department"]
+    namebox.SetFocus()
+    Sleep 250
+    cUIA_Sub.send "{enter}"
+    Sleep 250
+    cUIA_Sub.FindElement({ LocalizedType: "텍스트", Name: data["department"] }).ControlClick()
 
-	try
-		cUIA_Sub.FindElement({LocalizedType:"텍스트", Name: bunso}).ControlClick()
+    ;운전자
+    cUIA.WaitElement({ Type: "Image", Name: "요청인" }, 3000, , index := 2).Invoke()
+    lensInput(carPage, , data["driver"])
 
-	;운전자
-	cUIA.WaitElement({Type:"Image", Name:"요청인"},3000,,index:=2).Invoke()
-	lensInput(carPage, , data["driver"])
+    ;작업시점 선택창
+    cUIA.FindAll({ Type: "Image", Name: "위치" })[1].Invoke()
 
-	;작업시점 선택창
-	cUIA.FindAll({Type:"Image", Name:"위치"})[1].Invoke()
-
-	if !WinWaitNotActive(carPage,,5){
+    if !WinWaitNotActive(carPage, , 5) {
         MsgBox("작업시점 페이지 오픈 실패 Timeout")
-		ExitApp
-	}
+        ExitApp
+    }
 
-	cUIA_Sub := UIA_Browser(WinExist("A"))
+    cUIA_Sub := UIA_Browser(WinExist("A"))
 
-	;작업구간 시점
-	namebox := cUIA_sub.FindElement({AutomationId:"I_ZZLOCTEXT"})
-	namebox.value := data["point1"]
-	namebox.SetFocus()
-	Sleep 250
-	cUIA_Sub.send "{enter}"
-	Sleep 250
+    ;작업구간 시점
+    namebox := cUIA_sub.FindElement({ AutomationId: "I_ZZLOCTEXT" })
+    namebox.value := data["point1"]
+    namebox.SetFocus()
+    Sleep 250
+    cUIA_Sub.send "{enter}"
+    Sleep 250
 
-	try
-		cUIA_sub.WaitElement({LocalizedType:"그룹", Name: data["point1"]}).ControlClick()
+    try
+        cUIA_sub.WaitElement({ LocalizedType: "그룹", Name: data["point1"] }).ControlClick()
 
-	;작업시점 선택창
-	cUIA.FindAll({Type:"Image", Name:"위치"})[2].Invoke()
+    ;작업시점 선택창
+    cUIA.FindAll({ Type: "Image", Name: "위치" })[2].Invoke()
 
-	if !WinWaitNotActive(carPage,,5){
+    if !WinWaitNotActive(carPage, , 5) {
         MsgBox("작업시점 페이지 오픈 실패 Timeout")
-		ExitApp
-	}
+        ExitApp
+    }
 
-	cUIA_Sub := UIA_Browser(WinExist("A"))
-	;작업구간 종점
-	namebox := cUIA_sub.FindElement({AutomationId:"I_ZZLOCTEXT"})
-	namebox.value := data["point2"]
-	namebox.SetFocus()
-	Sleep 250
-	cUIA_Sub.send "{enter}"
-	Sleep 250
+    cUIA_Sub := UIA_Browser(WinExist("A"))
+    ;작업구간 종점
+    namebox := cUIA_sub.FindElement({ AutomationId: "I_ZZLOCTEXT" })
+    namebox.value := data["point2"]
+    namebox.SetFocus()
+    Sleep 250
+    cUIA_Sub.send "{enter}"
+    Sleep 250
 
-	try
-		cUIA_sub.WaitElement({LocalizedType:"그룹", Name: data["point2"]}).ControlClick()
+    try
+        cUIA_sub.WaitElement({ LocalizedType: "그룹", Name: data["point2"] }).ControlClick()
 
     ; 선로구분
     list_obj := cUIA.WaitElement({ AutomationId: "I_LINGB" })
     list_obj.expand()
     Sleep 50
-    list_obj.waitelement({Name: data["trackType"]},1000).invoke()
+    list_obj.waitelement({ Name: data["trackType"] }, 1000).invoke()
     Sleep 50
     list_obj.collapse()
     Sleep 100
@@ -177,46 +163,77 @@ RunVehicleLog(data) {
 
     MsgBox "입력을 완료하였습니다. 확인 후 저장해 주세요", "통합자동화", "iconi"
     WinActivate carPage
+
+    return
 }
 
 bringApproval(data) {
 
-    SetTitleMatchMode 1
-
     own_id := WinExist("A")
 
-    Run "https://mis.humetro.busan.kr/FS/xui/install/x_installChromeSSO.jsp?gv_selSystGubn=LA&gv_userBrowser=Edg"
-    if WinWait("개별업무통합관리", , 15)
-        while !WinExist("개별업무통합관리 - 선로출입현황 조회") {
-            if (PixelGetColor(450, 470) == 0x0063B5) {
-                targetID := WinExist("A")
-                WinClose("ahk_id " targetId)
+    ; --- 1. 브라우저/로그인 확인 ---
+    if !cUIA := WebAutoLogin.EnsureReady("SessionCheck") {
+        MsgBox "cUIA 반환 실패"
+        StopMacro()
+        return
+    }
 
-                MsgBox "로그인필요"  ;임시
-                ExitApp             ;임시
+    if (cUIA != "") {
+        ; SSO 페이지 호출 (기존 로직 참조)
 
-                break
+        cUIA.Navigate(
+            "https://mis.humetro.busan.kr/FS/xui/install/x_installChromeSSO.jsp?gv_selSystGubn=LA&gv_userBrowser=Edg", ,
+            1000)
+
+        if WinWait("개별업무통합관리", , 15) {
+            ; 이미 켜져있는 경우, 특정 픽셀(파란색 배경 등)을 확인하여 로그인 화면이면 재로그인 시도 루틴
+            ; (픽셀 체크 로직은 해상도/배율에 따라 불안정할 수 있으므로, 타이틀 위주로 체크 권장)
+
+            while !WinExist("개별업무통합관리 - 선로출입현황 조회") {
+
+                ; 로그인 여부 확인 (450,470 좌표 색상 체크)
+                if (PixelGetColor(450, 470) == 0x0063B5) {
+                    targetID := WinExist("A")
+                    WinClose("ahk_id " targetId)
+                    MsgBox "로그인 실패"
+                    return false
+                }
+
+                ; 무한 루프 방지
+                if (A_Index > 5)
+                    break
+                Sleep 500
             }
-            Sleep 100
-            if A_Index > 100
-                MsgBox "타임아웃 - 개별업무통환관리 열기 실패"
+        } else {
+            ; 창이 안 뜨면 실패
+            return false
         }
+    } else {
+        MsgBox("세션 준비된 브라우저가 없습니다.")
+        return
+    }
 
     if !WinWait("개별업무통합관리 - 선로출입현황 조회", , 30) {
-        MsgBox "timeout"
-        ExitApp
+        MsgBox "timeout - 선로출입현황 조회 화면이 뜨지 않습니다."
+        return
     }
+
+    WinClose("ahk_id " hwnd := cUIA.BrowserId)
+    WinWaitClose("ahk_id " hwnd, , 1)
 
     resultData := false
 
     if xldata := 승인정보_엑셀추출(data["driverName"]) {
-        승인번호 := xldata["승인번호"]
-        승인부서 := xldata["승인부서"]
-        승인자 := xldata["승인자"]
-        xldata["워크북"].Close(false)  ; 저장하지 않고 닫기
-        xldata["통합문서"].quit()
-
-        resultData := Map("승인번호", 승인번호, "승인부서", 승인부서, "승인자", 승인자)
+        try {
+            승인번호 := xldata["승인번호"]
+            승인부서 := xldata["승인부서"]
+            승인자 := xldata["승인자"]
+            xldata["워크북"].Close(false)  ; 저장하지 않고 닫기
+            xldata["통합문서"].quit()
+            resultData := Map("승인번호", 승인번호, "승인부서", 승인부서, "승인자", 승인자)
+        }
+        catch
+            MsgBox "엑셀 자동 추출이 불가능한 상태입니다`n확인 후 직접 입력바랍니다", , "icon!"
     }
     else
         MsgBox "엑셀 자동 추출이 불가능한 상태입니다`n확인 후 직접 입력바랍니다", , "icon!"
@@ -256,7 +273,7 @@ bringApproval(data) {
             }
         }
 
-        Sleep 750
+        Sleep 1000
         Click 1200, 190									;엑셀열기
         if !WinWaitActive("Microsoft Excel - Sheet", , 10) {
             MsgBox "timeout"
@@ -350,12 +367,12 @@ lensInput(originalID, office := "", sname := "") {
     sleep 250
 }
 
-menuClick(str) {
+menuClick(cUIA, str) {
     try {
-        cUIA := UIA_Browser("부산교통공사 -")
         ; 상단 메뉴 바 찾기
-        menubtn := cUIA.FindElement({ Name: "인원현황 일반업무 주요업무 자재사용 분야업무 안전관리 운전적합성 점검표" })
-        menubtn.FindElement({ Name: str }).ControlClick("left")
+        menubtn := cUIA.WaitElement({ Name: "인원현황 일반업무 주요업무 자재사용 분야업무 안전관리 운전적합성 점검표"}, 5000)
+        Sleep 100
+        menubtn.FindElement({ Name: str }).ControlClick()
     } catch {
         MsgBox("메뉴 클릭 실패: " str)
     }

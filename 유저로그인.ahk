@@ -1,4 +1,3 @@
-
 class UserLogin {
     static LoginUser() {
         return this.selectAndAuthUser()
@@ -302,5 +301,354 @@ class UserInputGUI {
         while WinExist("유저 정보 등록")
             Sleep 100
         return this.result
+    }
+}
+
+; ==============================================================================
+; 웹 자동 로그인 관리 클래스
+; ==============================================================================
+class WebAutoLogin {
+    static PortalURL := "https://btcep.humetro.busan.kr/portal"
+    static ERP_PortalURL := "https://niw.humetro.busan.kr/erpep.jsp"
+
+    ; ==============================================================================
+    ; [메서드] EnsureReady
+    ; 설명: 작업 유형에 따른 브라우저 상태를 준비합니다.
+    ; 매개변수:
+    ;   taskType - 작업 유형 ("WorkLog_Create", "WorkLog_View", "SessionCheck")
+    ; 반환값: 성공 시 해당 브라우저 UIA_browser 객체, 실패 시 false
+    ; ==============================================================================
+    static EnsureReady(taskType) {
+        user := ConfigManager.CurrentUser
+        if (!user.Has("id")) {
+            MsgBox("로그인된 사용자가 없습니다. 먼저 로컬 로그인을 수행해주세요.", "오류", "Iconx")
+            return false
+        }
+
+        ; 1. 브라우저/세션 점검 및 로그인
+        if (taskType == "SessionCheck") {
+            ; 세션 브라우저 cUIA 반환
+            return this._PrepareSessionOnly(user)
+        }
+        else if (taskType == "WorkLog_Create") {
+            ; 세션 브라우저 cUIA 반환
+            cUIA := this._PrepareSessionOnly(user)
+            ; 해당 브라우저로 업무일지 리스트 이동
+            this._GoToWorklogList(cUIA)
+            ; 업무일지 생성 클릭
+            cUIA.WaitElement({ LocalizedType: "링크", Name: "생성" }, 5000).Invoke()
+            ; 생성된 업무일지 cUIA할당, 로딩까지 시간이 걸릴 수 있으므로 5초동안 시도
+            loop 20 {
+                if cUIA := this._FindBrowserByElement()
+                    break
+                Sleep 250
+            }
+            ; cUIA 반환
+            return cUIA
+        }
+        else if (taskType == "WorkLog_View") {
+            ; 1. 열려있는 업무일지 브라우저 탐색
+            if cUIA := this._FindBrowserByElement()
+                return cUIA
+            ; 2. 없으면 ERP 포털 또는 통합포털이 열린 브라우저 탐색 (배열 순차 탐색)
+            if cUIA := this._FindBrowserByTab(["ERP포털시스템 - 부산교통공사", ":: 부산교통공사 ::"])
+                return this._NavToWorkLogView(cUIA, user)
+            ; 3. ERP 포털도 없으면 새로 실행
+            cUIA := this._PrepareSessionOnly(user)
+            return this._NavToWorkLogView(cUIA, user)
+        }
+
+        return true
+    }
+
+    ; ==============================================================================
+    ; [내부] _FindBrowserByElement
+    ; 설명: 실행 중인 브라우저를 순회하며 특정 요소가 있는 브라우저 객체를 반환
+    ; ==============================================================================
+    static _FindBrowserByElement() {
+        targetBrowsers := ["msedge.exe", "chrome.exe", "whale.exe"]
+
+        for exe in targetBrowsers {
+            if !ProcessExist(exe)
+                continue
+
+            if !hwndList := WinGetList("ahk_exe " exe)
+                continue
+
+            for hwnd in hwndList {
+                ; [최적화] 타이틀에 "부산교통공사"가 없으면 스킵 (가장 확실한 필터)
+                if !InStr(WinGetTitle(hwnd), "부산교통공사")
+                    continue
+
+                try {
+                     cUIA := UIA_Browser("ahk_id " hwnd)
+                    ; UIA_Browser 인스턴스 생성만으로도 시간이 소요되므로 위 조건으로 최대한 필터링함
+                    if cUIA.FindElement({ AutomationId: "I_GIJUND" , Value: FormatTime(DateAdd(A_Now, -9, "Hours"), "yyyy-MM-dd")})
+                        return cUIA
+                }
+            }
+        }
+        return false
+    }
+
+    ; ==============================================================================
+    ; [내부] _FindBrowserByTab(
+    ; 설명: 실행 중인 브라우저를 순회하며 탭 이름에 키워드(배열)가 포함된 브라우저 객체를 반환
+    ; ==============================================================================
+    static _FindBrowserByTab(keywordArr) {
+        targetBrowsers := ["msedge.exe", "chrome.exe", "whale.exe"]
+
+        for exe in targetBrowsers {
+            if !ProcessExist(exe)
+                continue
+
+            try {
+                hwndList := WinGetList("ahk_exe " exe)
+            } catch {
+                continue
+            }
+
+            for hwnd in hwndList {
+                cUIA := UIA_Browser("ahk_id " hwnd)
+                tabs := cUIA.GetAllTabNames()
+
+                for keyword in keywordArr {
+                    for tabItem in tabs {
+                        if InStr(tabItem, keyword) {
+                            try {
+                                cUIA.SelectTab(tabItem) ; 해당 탭 선택
+                            }
+                            return cUIA
+                        }
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    ; ==============================================================================
+    ; [내부] _PrepareSessionOnly (Pattern 선로출입관리)
+    ; ==============================================================================
+    static _PrepareSessionOnly(user) {
+
+        exeName := this.GetBrowserExe()
+
+        ; 1. 무조건 새 창으로 포털 접속 (기존 작업 방해 방지)
+        ; --new-window: 새 창 강제
+        ; --start-maximized를 빼고 실행해야 이동이 수월함
+        Run(exeName " --new-window " this.PortalURL) ;PortalURL
+        WinWaitActive("ahk_exe " exeName, , 5)
+        WinRestore(WinExist())
+
+        ; 2. UIA 연결
+        try {
+            ; WinWait로 찾은 마지막 창(Last Found Window)을 대상으로 UIA 초기화
+            cUIA := UIA_Browser("ahk_id " WinExist())
+        } catch as e {
+            ; 연결 실패 시 로그 남기거나 false 반환
+            MsgBox "cUIA 연결 실패"  ;디버깅용
+            return false
+        }
+
+        ; 5. 로그인 점검
+        if !this.IsLoggedIn(cUIA)
+            return this.Login(user["id"], user["webPW"], user["pw2"], cUIA)
+
+        return cUIA
+    }
+
+    ; ==============================================================================
+    ; [내부] _NavToWorkLogView (Pattern 일지조회)
+    ; ==============================================================================
+    static _NavToWorkLogView(cUIA, user) {
+        try {
+            ; 1. 메뉴 이동
+            this._GoToWorklogList(cUIA)
+
+            ; 2. 일지 검색 및 클릭
+            targetDate := FormatTime(DateAdd(A_Now, -9, "Hours"), "yyyyMMdd")
+            dept := user.Has("department") ? user["department"] : "호포전기분소"
+            targetName := targetDate " " dept " 업무일지"
+
+            try {
+                ; 항목 클릭
+                cUIA.WaitElement({LocalizedType: "텍스트",  Name: targetName }, 7000).Click("Left")
+                Sleep 250
+                ; 변경/조회 클릭
+                cUIA.WaitElement({ LocalizedType: "링크", Name: "변경/조회" }, 3000).Invoke()
+                Sleep 500
+            } catch {
+                MsgBox("오늘자 업무일지(" targetName ")를 찾을 수 없습니다.", "알림", "Icon!")
+                return false
+            }
+
+            return this._FindBrowserByElement()
+
+        } catch as e {
+            MsgBox("업무일지 조회 화면 이동 중 오류: " e.Message, "오류", "Iconx")
+            return false
+        }
+    }
+
+    ; ==============================================================================
+    ; [헬퍼] 업무일지 리스트 메뉴 이동
+    ; ==============================================================================
+    static _GoToWorklogList(cUIA) {
+
+        ;cUIA의 현재 페이지가 ERPportal이 아니고
+        if !InStr(WinGetTitle(cUIA.BrowserId), "ERP포털시스템 - 부산교통공사") {
+            ;통합포털도 아니면
+            if !InStr(WinGetTitle(cUIA.BrowserId), ":: 부산교통공사 ::")
+                ;ERPportal열기
+                cUIA.navigate(this.ERP_PortalURL, , 10000)
+            ;통합포털이면
+            else
+                ;ERP버튼으로 클릭
+                cUIA.WaitElement({Type:"Link", Name:"ERP"}, 3000).Invoke()
+        }
+
+        ; 업무일지 아이콘/버튼이 나오면 클릭 => 업무일지 리스트 페이지로 이동
+        cUIA.WaitElement({ Name: "업무일지 업무일지" }, 10000).Invoke()
+        ; 로드 대기 (일지 리스트 테이블 뜰때까지?)
+
+        return true
+    }
+
+    ; ==============================================================================
+    ; [헬퍼] '부산교통공사'탭이 열린 브라우저 (기본:엣지)
+    ; ==============================================================================
+    static GetBrowserExe() {
+
+        ; 검사할 브라우저 목록
+        targetBrowsers := ["msedge.exe", "chrome.exe", "whale.exe"]
+
+        for exe in targetBrowsers {
+            ; 1. 해당 브라우저 프로세스가 없으면 스킵
+            if !ProcessExist(exe)
+                continue
+
+            ; 2. 해당 브라우저의 모든 창 ID(HWND) 가져오기
+            try {
+                hwndList := WinGetList("ahk_exe " exe)
+            } catch {
+                continue
+            }
+
+            ; 3. 각 창을 순회하며 탭 검사
+            for hwnd in hwndList {
+                ; [최적화]
+                if !InStr(WinGetTitle(hwnd), "부산교통공사")
+                    continue
+
+                try {
+                    ; 최소화된 창은 UIA가 요소를 못 읽을 수 있어서 건너뛰거나, WinRestore를 해야 함.
+                    ; (일단은 '조용한 탐색'을 위해 복원 없이 시도 에러나면 넘어감)
+
+                    cUIA := UIA_Browser("ahk_id " hwnd)
+                    tabs := cUIA.GetAllTabs()
+
+                    for tabItem in tabs {
+                        ; 탭 이름에 검색어가 포함되어 있는지 확인
+                        if InStr(tabItem.Name, "부산교통공사") {
+                            return exe ; 발견 즉시 exe 이름 반환 (함수 종료)
+                        }
+                    }
+                } catch {
+                    ; UIA 연결 실패, 권한 문제, 또는 요소 찾기 실패 시 다음 창으로 넘어감
+                    continue
+                }
+            }
+        }
+
+        return "msedge.exe" ; 모든 브라우저를 다 뒤져도 없으면 엣지로 반환
+    }
+
+    ; ==============================================================================
+    ; [메서드] IsLoggedIn
+    ; 설명: Positive Validation 방식의 로그인 점검
+    ; ==============================================================================
+    static IsLoggedIn(cUIA := "") {
+        try {
+            if !cUIA
+                cUIA := UIA_Browser("A") ; 현재 활성 브라우저
+
+            loop 70 {
+                ; 1. 로그아웃 버튼이 있으면 로그인된 상태 (Positive)
+                try
+                    if cUIA.FindElement({ Name: "로그아웃" })
+                        return cUIA
+
+                ; 2. 업무일지 메뉴 버튼이 있어도 로그인된 상태
+                try
+                    if cUIA.FindElement({ Name: "업무일지 업무일지" })
+                        return cUIA
+
+                ; 3. 로그인 입력창(userId)이 있으면 로그아웃 상태 (Negative)
+                try
+                    if cUIA.FindElement({ AutomationId: "userId" })
+                        return false
+
+                Sleep 100   ;30 * 100 = 7초간 확인
+            }
+
+            ; 4. 둘 다 없으면? 로딩중이거나 엉뚱한 페이지.
+            ; 일단 False 반환하여 로그인 시도 유도하거나 예외 처리
+            MsgBox "로그인 상태 확인 불가"
+            return false
+
+        } catch {
+            MsgBox "알수 없는 에러"
+            return false
+        }
+    }
+
+    ; ==============================================================================
+    ; [메서드] Login
+    ; ==============================================================================
+    static Login(id, pw, pw2, cUIA := "") {
+        if (id == "" || pw == "") {
+            MsgBox("로그인 정보(사번, 비번)가 없습니다.", "오류")
+            return false
+        }
+
+        try {
+            if !cUIA
+                cUIA := UIA_Browser("A")
+
+            ; 아이디 입력
+            cUIA.WaitElement({ AutomationId: "userId" }, 2000).Value := id
+
+            ; 비밀번호 입력
+            cUIA.FindElement({ AutomationId: "password" }).Value := pw
+
+            ; 로그인 버튼 클릭 (ClassName: btn_login)
+            cUIA.FindElement({ ClassName: "btn_login" }).Invoke()
+
+            ; 2차 인증 대기 (있을 경우)
+            try {
+                ; 인증번호 입력창 대기 (짧게)
+                cUIA.WaitElement({ AutomationId: "certi_num" }, 2000).Value := pw2
+                cUIA.FindElement({ ClassName: "btn_blue" }).Invoke() ; 확인 버튼
+            } catch as e {
+                MsgBox("2차인증 실패`n" e.Message, "오류")
+                return false
+            }
+
+
+            ; 로그인 완료 대기 (로그아웃 버튼 뜰 때까지)
+            try {
+                cUIA.WaitElement({ Name: "로그아웃" }, 10000)
+                Sleep 1000
+                return cUIA
+            } catch {
+                MsgBox("로그인 후 응답이 지연되거나 실패했습니다.", "오류")
+                return false
+            }
+
+        } catch as e {
+            MsgBox("자동 로그인 실패: " e.Message, "오류", "Iconx")
+            return cUIA
+        }
     }
 }

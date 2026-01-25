@@ -229,8 +229,6 @@ class ShortcutActions {
         KeyWait "LWin"
         KeyWait "Alt"
 
-        MsgBox "일지열기 시작", , "t0.5"
-
         user := ConfigManager.CurrentUser
         if (!user || user["id"] == "") {
             MsgBox "로그인된 사용자가 없습니다."
@@ -249,72 +247,31 @@ class ShortcutActions {
         ; 로그인 실행
         cUIA := ShortcutActions.AutoERPPortal(user["id"], user["webPW"], user["pw2"], browserExe)
 
-        ; 팝업 처리 등
-        if !WinActive("ERP포털시스템 - 부산교통공사") {
-            try {
-                if cUIA {
-                    try cUIA.WaitElement({ ClassName: "lastestip" }, 5000)
-                    cUIA.send("{esc}")
-                }
-            }
+        ;팝업 처리
+        cUIA.WaitElement({ ClassName: "lastestip" }, 5000)
+        cUIA.send("{esc}")
 
-            ; 키 릴리즈 대기
-            while GetKeyState("LWin", "P") or GetKeyState("Alt", "P") {
-                Sleep 10
-                if A_Index > 100
-                    break
-            }
-
-            if cUIA {
-                cUIA.newtab()
-                Sleep 1000
-                try cUIA.Navigate("https://btcep.humetro.busan.kr/portal/default/main/erpportal.page", targetTitle :=
-                    "ERP포털시스템 - 부산교통공사")
-            }
-        }
-
-        if !cUIA
-            cUIA := UIA_Browser("ERP포털시스템 - 부산교통공사")
+        ;ERP포털 이동
+        cUIA.WaitElement({ Type: "Link", Name: "ERP" }, 3000).Invoke()
 
         ; 업무일지 메뉴 이동
-        try {
-            cUIA.WaitElement({ Name: "업무일지 업무일지" }, 7000).Invoke()
-        } catch as e {
-            MsgBox "타임아웃, 업무일지 버튼을 찾을 수 없습니다."
-            return
-        }
+        cUIA.WaitElement({ Name: "업무일지 업무일지" }, 10000).Invoke()
 
         ; 조회 및 클릭
-        try {
-            ; 어제 날짜? 원본 코드는 A_Now - 9 hours. -> 야간 근무 고려해서 09시 이전이면 전날 일지?
-            ; FormatTime(DateAdd(A_Now, -9, "Hours"), "yyyyMMdd")
-            targetDate := FormatTime(DateAdd(A_Now, -9, "Hours"), "yyyyMMdd")
-            targetName := targetDate " " user["department"] " 업무일지" ; 부서명 동적으로
+        targetDate := FormatTime(DateAdd(A_Now, -9, "Hours"), "yyyyMMdd")
+        targetName := targetDate " " user["department"] " 업무일지" ; 부서명 동적으로
 
-            ; 원본은 "호포전기분소" 하드코딩이었으나 profile.department 사용 권장
-            ; 일단 원본 로직 유지하되 department 있으면 사용
-            dept := user.Has("department") ? user["department"] : "호포전기분소"
+        try
+            dept := user["department"]
+        catch
+            MsgBox "업무일지 리스트 선택 실패, 분소명이 설정되지 않은 상태입니다"
 
-            ; 정확한 이름 매칭 시도
-            ; cUIA.WaitElement({Name: targetDate " " dept " 업무일지"}, 3000).Click("Left")
-            ; 안되면 그냥 가장 최신 거? 원본은 날짜 지정함.
+        btnName := targetDate " " dept " 업무일지"
 
-            ; *주의*: 원본은 "호포전기분소" 고정이었음. Config에 department 있으므로 활용.
-            btnName := targetDate " " dept " 업무일지"
+        cUIA.WaitElement({ Name: btnName }, 5000).Click("Left")
 
-            try {
-                cUIA.WaitElement({ Name: btnName }, 3000).Click("Left")
-            } catch {
-                ; 실패시 department 없이 시도해볼 수도 있음
-                MsgBox "일지 리스트에서 '" btnName "' 을 찾지 못했습니다."
-                return
-            }
+        cUIA.FindElement({ LocalizedType: "링크", Name: "변경/조회" }).Invoke()
 
-            cUIA.FindElement({ LocalizedType: "링크", Name: "변경/조회" }).Invoke()
-
-        } catch as e {
-            MsgBox "일지 선택 과정 오류: " e.Message
-        }
     }
 
     ; Win + Alt + A : 웹 -> 엑셀
@@ -332,17 +289,16 @@ class ShortcutActions {
         ExcelHandler.ExcelToWebTable()
     }
 
-    ; Win + Ctrl + Esc : 강제 종료 (이미 Main.ahk 에 람다로 구현되어 있으나 여기로 통합 가능)
+    ; Win + Ctrl + Esc : 종료
     static ForceExitAction(*) {
-        ExitApp
+        OnExitApp()
     }
 
     ; ERP 로그인 로직
-    static AutoERPPortal(id, pw, certi, browserExe := "") {
-        url := "https://btcep.humetro.busan.kr/portal/default/main/erpportal.page"
+    static AutoERPPortal(id, pw, certi, browserExe := "msedge.exe") {
+        url := " https://btcep.humetro.busan.kr/portal/default/main/erpportal.page"
 
         ; 브라우저 실행 (이미 열려있으면 탭 추가/활성화는 UIA_Browser가 처리하거나 사용자가 함)
-        ; 원본 로직: Run browser url
         if (browserExe != "") {
             Run browserExe " " url
         } else {
@@ -353,14 +309,14 @@ class ShortcutActions {
         loop 100 {
             try {
                 cUIA := UIA_Browser(":: 부산교통공사 포털시스템 ::")
-                try cUIA.WaitElement({ AutomationId: "userId" }, 2000).value := id
-                try cUIA.FindElement({ AutomationId: "password" }).value := pw
-                try cUIA.FindElement({ ClassName: "btn_login" }).invoke()
+                cUIA.WaitElement({ AutomationId: "userId" }, 2000).value := id
+                cUIA.WaitElement({ AutomationId: "password" }, 1000).value := pw
+                cUIA.WaitElement({ ClassName: "btn_login" }, 1000).invoke()
 
                 ; 2차 인증
                 if (certi != "") {
-                    try cUIA.WaitElement({ AutomationId: "certi_num" }, 2000).value := certi
-                    try cUIA.FindElement({ ClassName: "btn_blue" }).invoke()
+                    cUIA.WaitElement({ AutomationId: "certi_num" }, 2000).value := certi
+                    cUIA.WaitElement({ ClassName: "btn_blue" }, 1000).invoke()
                 }
 
                 cUIA.WaitTitleChange(":: 부산교통공사 ::", 5000)

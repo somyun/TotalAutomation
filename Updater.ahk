@@ -8,8 +8,15 @@
 configFile := A_ScriptDir "\config.json"
 mainExe := A_ScriptDir "\Main.exe"
 mainAhk := A_ScriptDir "\Main.ahk"
-tempExe := A_ScriptDir "\Main_new.exe"
 logFile := A_ScriptDir "\debug.log"
+
+; [New] Asset Configuration
+; type: "exe" or "zip"
+; asset: Name in GitHub Release
+; local: Local destination path (file path for exe, directory path for zip)
+Assets := [
+    Map("type", "exe", "asset", "Main.exe", "local", mainExe)
+]
 
 ; ==============================================================================
 ; GUI Setup (Lazy Init)
@@ -26,7 +33,7 @@ CreateGui() {
 global UpdateGui := ""
 
 UpdateStatus(text) {
-    global UpdateGui ; Fix: Declare global because we assign to it below
+    global UpdateGui
     if (UpdateGui == "") {
         UpdateGui := CreateGui()
         UpdateGui.Show("NoActivate")
@@ -52,65 +59,102 @@ try {
 
     if (!isOnline) {
         ; Case: OFFLINE
-        ; Run Main in Offline Mode silently
         if (FileExist(mainExe)) {
             Run(mainExe " /offline")
         } else if (FileExist(mainAhk)) {
             Run(mainAhk " /offline")
+        } else {
+            MsgBox("인터넷 연결이 없으며 실행할 파일(Main.exe)도 없습니다.")
         }
-        UpdateGui.Destroy()
+        if (UpdateGui != "")
+            UpdateGui.Destroy()
         ExitApp
     }
 
-    ; 2. VERSION CHECK
+    ; 2. VERSION & INTEGRITY CHECK
     UpdateStatus("버전 정보 가져오는 중...")
     latestRelease := GetLatestRelease(repo)
 
     shouldUpdate := false
-    downloadUrl := ""
+    updateReason := ""
     latestVer := ""
+    downloadQueue := [] ; List of maps: {url, path, type, name}
 
     if (IsObject(latestRelease) && latestRelease.Has("tag_name")) {
         latestVer := latestRelease["tag_name"]
 
-        ; Normalize versions for comparison (remove 'v')
         cVerClean := StrReplace(currentVer, "v", "")
         lVerClean := StrReplace(latestVer, "v", "")
 
+        ; Condition A: New Version Available
         if (VerCompare(lVerClean, cVerClean) > 0) {
             shouldUpdate := true
-            for i, asset in latestRelease["assets"] {
-                if (asset["name"] == "Main.exe") {
-                    downloadUrl := asset["browser_download_url"]
-                    break
+            updateReason := "새 버전 (" latestVer ")"
+
+            ; In case of update, we download ALL assets
+            for item in Assets {
+                url := GetAssetUrl(latestRelease, item["asset"])
+                if (url != "") {
+                    downloadQueue.Push(Map("url", url, "item", item))
+                } else {
+                    MsgBox("경고: 릴리즈에서 파일을 찾을 수 없습니다: " item["asset"])
                 }
             }
         }
-    } else {
-        ; Case: ONLINE but API FAILED (or Limit Exceeded)
-        MsgBox("업데이트 정보를 받아올 수 없습니다")
-        UpdateGui.Destroy()
+        ; Condition B: Missing Files (Repair) - Only if version is matching or we are strictly repairing
+        else {
+            for item in Assets {
+                isMissing := false
+                if (item["type"] == "exe" || item["type"] == "file") {
+                    if !FileExist(item["local"])
+                        isMissing := true
+                } else if (item["type"] == "zip") {
+                    if !DirExist(item["local"])
+                        isMissing := true
+                    else {
+                        ; Simple check: if directory is empty?
+                        ; For now, DirExist is the main check.
+                    }
+                }
 
-        ; Fallback to Normal Run (Skip Update Check in Main)
-        if (mode == "Production" && !ProcessExist("Main.exe"))
+                if (isMissing) {
+                    shouldUpdate := true
+                    updateReason := "필수 파일 복구"
+
+                    url := GetAssetUrl(latestRelease, item["asset"])
+                    if (url != "") {
+                        downloadQueue.Push(Map("url", url, "item", item))
+                    } else {
+                        MsgBox("경고: 복구할 파일을 릴리즈에서 찾을 수 없습니다: " item["asset"])
+                    }
+                }
+            }
+        }
+
+    } else {
+        ; API Failed or Limit
+        MsgBox("업데이트 정보를 받아올 수 없습니다")
+        if (UpdateGui != "")
+            UpdateGui.Destroy()
+
+        if (mode == "Production" && !ProcessExist("Main.exe") && FileExist(mainExe))
             Run(mainExe " /skipupdate")
 
         ExitApp
     }
 
-    if (shouldUpdate && downloadUrl != "" && mode == "Production") {
-        ; Start Update - GUI already visible
-        UpdateStatus("새 버전 발견! (" latestVer ")")
+    ; 3. EXECUTE UPDATE
+    if (shouldUpdate && downloadQueue.Length > 0 && mode == "Production") {
 
-        ; 1. Close Main
-        UpdateStatus("메인 프로그램 종료 중...")
+        UpdateStatus(updateReason " 진행 중...")
 
+        ; Close Main
         if ProcessExist("Main.exe") {
+            UpdateStatus("메인 프로그램 종료 중...")
             try ProcessClose("Main.exe")
-            if !ProcessWaitClose("Main.exe", 2) { ; Wait up to 2 seconds gracefully
-                ; If still running, force kill immediately
+            if !ProcessWaitClose("Main.exe", 2) {
                 try RunWait('taskkill /F /IM "Main.exe"', , "Hide")
-                ProcessWaitClose("Main.exe", 1) ; Final verification wait
+                ProcessWaitClose("Main.exe", 1)
             }
         }
 
@@ -119,51 +163,64 @@ try {
             ExitApp
         }
 
-        ; 2. Download
-        UpdateStatus("다운로드 중...")
-        UpdateGui["LoadingBar"].Opt("-0x8") ; Determinate mode
-        UpdateGui["LoadingBar"].Value := 0
+        UpdateGui["LoadingBar"].Opt("-0x8") ; Determinate
+        UpdateGui["LoadingBar"].Range := "0-" downloadQueue.Length * 100
+        totalProgress := 0
 
-        try {
-            whr := ComObject("WinHttp.WinHttpRequest.5.1")
-            whr.Open("GET", downloadUrl, true)
-            whr.SetRequestHeader("User-Agent", "AutoHotkey")
-            whr.Option[4] := 13056
-            whr.Send()
-            whr.WaitForResponse()
+        ; Process Queue
+        for i, task in downloadQueue {
+            item := task["item"]
+            url := task["url"]
+            assetName := item["asset"]
 
-            stream := ComObject("ADODB.Stream")
-            stream.Type := 1 ; Binary
-            stream.Open()
-            stream.Write(whr.ResponseBody)
-            stream.SaveToFile(tempExe, 2)
-            stream.Close()
+            UpdateStatus("다운로드 중: " assetName)
 
-            UpdateGui["LoadingBar"].Value := 100
-            UpdateStatus("설치 중...")
+            tempFile := A_ScriptDir "\temp_" assetName
 
-            ; 3. Replace
-            if FileExist(mainExe)
-                FileMove(mainExe, mainExe ".old", 1)
-            FileMove(tempExe, mainExe, 1)
-            try FileDelete(mainExe ".old")
+            try {
+                DownloadFile(url, tempFile)
 
-        } catch as e {
-            MsgBox("다운로드/설치 실패: " e.Message)
-            ExitApp
+                UpdateStatus("설치 중: " assetName)
+
+                if (item["type"] == "exe" || item["type"] == "file") {
+                    ; File Move
+                    targetPath := item["local"]
+                    if FileExist(targetPath)
+                        FileMove(targetPath, targetPath ".old", 1)
+                    FileMove(tempFile, targetPath, 1)
+                    try FileDelete(targetPath ".old")
+
+                } else if (item["type"] == "zip") {
+                    ; Unzip
+                    destDir := item["local"]
+                    if !DirExist(destDir)
+                        DirCreate(destDir)
+
+                    ; Extract to Root (assuming structure in zip is ui/..., Lib/...)
+                    UnzipFile(tempFile, A_ScriptDir)
+
+                    FileDelete(tempFile)
+                }
+
+                UpdateGui["LoadingBar"].Value := i * 100
+
+            } catch as e {
+                MsgBox("설치 실패 (" assetName "): " e.Message)
+                ExitApp
+            }
         }
 
-        ; 4. Restart Main (Exit Updater will happen naturally)
+        UpdateStatus("업데이트 완료!")
+        Sleep 500
         Run(mainExe " /skipupdate")
 
     } else {
         ; No Update or Dev Mode
-        ; If Main is NOT running, launch it (Launcher behavior)
         if (mode == "Production" && !ProcessExist("Main.exe")) {
             UpdateStatus("최신 버전입니다.")
+            Sleep 500
             Run(mainExe " /skipupdate")
         }
-        ; If Main IS running, just exit silently (Side-car behavior)
     }
 
 } catch as e {
@@ -174,25 +231,22 @@ if (UpdateGui != "")
     UpdateGui.Destroy()
 
 ; ==============================================================================
-; Helper Functions (Restored)
+; Helper Functions
 ; ==============================================================================
+
 GetLocalVersion() {
-    ; 1. Try Reading from Main.exe File Version
     if FileExist(mainExe) {
         try {
             ver := FileGetVersion(mainExe)
             if (ver != "")
-                return "v" ver ; AutoHotkey compiles as x.x.x.x, usually we map this to vX.X.X
+                return "v" ver
         }
     }
-
-    ; 2. Fallback: Parse Main.ahk
     if FileExist(mainAhk) {
         content := FileRead(mainAhk, "UTF-8")
         if RegExMatch(content, 'AppVersion\s*:=\s*"(v[\d\.]+)"', &match)
             return match[1]
     }
-
     return "v0.0.0"
 }
 
@@ -205,25 +259,74 @@ GetLatestRelease(repo) {
         whr.Option[4] := 13056
         whr.Send()
         whr.WaitForResponse()
-
         if (whr.Status == 200)
             return JSON.parse(whr.ResponseText)
     }
     return ""
 }
 
+GetAssetUrl(releaseData, assetName) {
+    if (releaseData.Has("assets")) {
+        for asset in releaseData["assets"] {
+            if (asset["name"] = assetName) ; Case-insensitive comparison
+                return asset["browser_download_url"]
+        }
+    }
+    return ""
+}
+
 CheckInternetConnection() {
     try {
-        ; Simple Ping to Google DNS (8.8.8.8) or similar reliable host
-        ; Or HTTP HEAD to google.com
         whr := ComObject("WinHttp.WinHttpRequest.5.1")
         whr.Open("HEAD", "http://www.google.com", true)
         whr.Option[4] := 13056
         whr.Send()
-        whr.WaitForResponse(2) ; Wait max 2 seconds
-
+        whr.WaitForResponse(2)
         return (whr.Status == 200)
     } catch {
         return false
+    }
+}
+
+DownloadFile(url, dest) {
+    whr := ComObject("WinHttp.WinHttpRequest.5.1")
+    whr.Open("GET", url, true)
+    whr.SetRequestHeader("User-Agent", "AutoHotkey")
+    whr.Option[4] := 13056
+    whr.Send()
+    whr.WaitForResponse()
+
+    if (whr.Status != 200)
+        throw Error("Download failed, status: " whr.Status)
+
+    stream := ComObject("ADODB.Stream")
+    stream.Type := 1 ; Binary
+    stream.Open()
+    stream.Write(whr.ResponseBody)
+    stream.SaveToFile(dest, 2) ; Overwrite
+    stream.Close()
+}
+
+UnzipFile(zipPath, destDir) {
+    shell := ComObject("Shell.Application")
+
+    ; Ensure dest exists
+    if !DirExist(destDir)
+        DirCreate(destDir)
+
+    ; Get Zip items
+    try {
+        zipFolder := shell.NameSpace(zipPath)
+        destFolder := shell.NameSpace(destDir)
+
+        if (zipFolder && destFolder) {
+            ; 4 (No Progress UI) + 16 (Yes to All)
+            destFolder.CopyHere(zipFolder.Items, 20)
+            Sleep 1000
+        } else {
+            throw Error("Failed to open Zip or Dest folder")
+        }
+    } catch as e {
+        throw Error("Unzip failed: " e.Message)
     }
 }

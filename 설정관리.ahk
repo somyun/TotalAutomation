@@ -3,6 +3,7 @@ class ConfigManager {
     static ConfigPath := A_ScriptDir "\config.json"
     static Config := Map()
     static CurrentUser := Map() ; 현재 로그인한 유저의 '프로필' 객체 (user.profile)
+    static NeedsPasswordReset := false ; 복호화 실패로 인한 암호 초기화 발생 플래그
 
     ; 설정 로드
     static Load() {
@@ -16,16 +17,31 @@ class ConfigManager {
             fileContent := FileRead(this.ConfigPath, "UTF-8")
             this.Config := JSON.parse(fileContent)
 
+            ; 플래그 초기화
+            this.NeedsPasswordReset := false
+            hasDecryptionError := false
+
             ; 민감한 필드 복호화
             key := this.GetKey()
             if (key != "" && this.Config.Has("users")) {
                 for uid, user in this.Config["users"] {
                     if user.Has("profile") {
-                        this._DecryptProfile(user["profile"], key)
+                        ; _DecryptProfile이 실패(false)를 반환하면 에러 플래그 설정
+                        if !this._DecryptProfile(user["profile"], key) {
+                            hasDecryptionError := true
+                        }
                     }
                 }
             }
+
+            ; 복호화 오류가 하나라도 있었다면
+            if (hasDecryptionError) {
+                this.NeedsPasswordReset := true
+                this.Save() ; 빈 암호를 파일에 즉시 저장
+            }
+
             return true
+
         } catch as e {
             MsgBox("설정 파일 로드 중 오류 발생: " e.Message, "오류", "Iconx")
             return false
@@ -177,27 +193,42 @@ class ConfigManager {
         for field in fields {
             if profile.Has(field) && profile[field] != "" {
                 ; 사본에서 작업하지만 문제가 발생할 경우 이중 암호화 방지.
-                ; 이미 암호화되었는지 확인? "ENC_"
-                if (SubStr(profile[field], 1, 4) != "ENC_")
-                    profile[field] := "ENC_" . Encrypt(profile[field], key)
+                ; 이미 암호화되었는지 확인용 첨두어 "ENC_"
+                if (SubStr(profile[field], 1, 4) != "ENC_") {
+                    ;데이터 앞에 "_OK_" 검증용 문자열을 붙여서 암호화
+                    profile[field] := "ENC_" . Encrypt("_OK_" profile[field], key)
+                }
             }
         }
     }
 
     static _DecryptProfile(profile, key) {
         fields := ["pw2", "sapPW", "webPW"]
+        allSuccess := true ; 전체 성공 여부
+
         for field in fields {
             if profile.Has(field) && profile[field] != "" {
                 if (SubStr(profile[field], 1, 4) == "ENC_") {
                     try {
-                        decrypted := Decrypt(SubStr(profile[field], 5), key)
-                        profile[field] := decrypted
+                        decryptedRaw := Decrypt(SubStr(profile[field], 5), key)
+
+                        ; 복호화된 데이터가 "_OK_"로 시작하는지 검사
+                        if (SubStr(decryptedRaw, 1, 4) == "_OK_") {
+                            ; 검증 성공: 앞의 "_OK_" 4글자를 떼고 실제 데이터만 저장
+                            profile[field] := SubStr(decryptedRaw, 5)
+                        } else {
+                            ; 검증 실패: 강제로 에러 발생시킴
+                            throw Error("Decryption Validation Failed")
+                        }
+
                     } catch {
-                        ; 복호화 실패 (잘못된 키?), 원본 유지 또는 비워두기?
-                        ; 원본 유지 (사용자가 수동으로 파일을 복사했을 수 있음)
+                        ; 이제 여기서 확실하게 잡힙니다.
+                        profile[field] := ""
+                        allSuccess := false
                     }
                 }
             }
         }
+        return allSuccess ; 성공하면 true, 하나라도 실패하면 false 반환
     }
 }

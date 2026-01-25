@@ -5,32 +5,31 @@ RunTrackAccess(data) {
         return
 
     ; --- 1. 브라우저/로그인 확인 ---
+    if !cUIA := WebAutoLogin.EnsureReady("SessionCheck") {
+        MsgBox "cUIA 반환 실패"
+        StopMacro()
+        return
+    }
 
-    ; 현재 브라우저 확인
-    nowBrowser := GetBrowserExe()
-
-    ; 로그인 및 페이지 진입 루틴
-    ; 기존 로직: browserExist() -> nowBrowser 반환 (실행 파일명)
-    ; 여기서는 항상 브라우저를 띄우거나 이미 떠있는지 확인 후 진행
-
-    if (nowBrowser != "") {
+    if (cUIA != "") {
         ; SSO 페이지 호출 (기존 로직 참조)
-        Run nowBrowser " https://mis.humetro.busan.kr/FS/xui/install/x_installChromeSSO.jsp?gv_selSystGubn=LA&gv_userBrowser=Edg"
+
+        cUIA.Navigate(
+            "https://mis.humetro.busan.kr/FS/xui/install/x_installChromeSSO.jsp?gv_selSystGubn=LA&gv_userBrowser=Edg", ,
+            1000)
 
         if WinWait("개별업무통합관리", , 15) {
             ; 이미 켜져있는 경우, 특정 픽셀(파란색 배경 등)을 확인하여 로그인 화면이면 재로그인 시도 루틴
             ; (픽셀 체크 로직은 해상도/배율에 따라 불안정할 수 있으므로, 타이틀 위주로 체크 권장)
 
             while !WinExist("개별업무통합관리 - 선로출입현황 조회") {
-                ; 로그인 화면인지 확인 (기존 로직: 450,470 좌표 색상 체크)
-                ; 여기서는 타이틀이 '개별업무통합관리'인데 '선로출입현황 조회'가 아니면
-                ; 로그인이 안되었거나 다른 메뉴라고 판단.
 
+                ; 로그인 여부 확인 (450,470 좌표 색상 체크)
                 if (PixelGetColor(450, 470) == 0x0063B5) {
                     targetID := WinExist("A")
                     WinClose("ahk_id " targetId)
-                    login_start(nowBrowser)
-                    break
+                    MsgBox "로그인 실패"
+                    return false
                 }
 
                 ; 무한 루프 방지
@@ -39,11 +38,11 @@ RunTrackAccess(data) {
                 Sleep 500
             }
         } else {
-            ; 창이 안 뜨면 로그인 시도
-            login_start(nowBrowser)
+            ; 창이 안 뜨면 실패
+            return false
         }
     } else {
-        MsgBox("브라우저 설정이 올바르지 않습니다.")
+        MsgBox("세션 준비된 브라우저가 없습니다.")
         return
     }
 
@@ -64,6 +63,9 @@ RunTrackAccess(data) {
     WinActivate("개별업무통합관리")
     WinMaximize(originalId)
 
+    WinClose("ahk_id " hwnd := cUIA.BrowserId)
+    WinWaitClose("ahk_id " hwnd, , 1)
+
     ; --- 2. 입력 로직 실행 ---
 
     ; "외 N명" 문자열 생성
@@ -82,6 +84,9 @@ RunTrackAccess(data) {
             othersStr := " 외 " othersCount "명"
     }
 
+    ;모터카지정 여부
+    모터카 := data["workType"] == 2 or data["workType"] == 4 or data["workType"] == 6
+
     Sleep 100
 
     ; (1) 행추가 (Tab 16번 -> Enter)
@@ -91,12 +96,11 @@ RunTrackAccess(data) {
     ; (2) 작업구분
     Send "{tab 13}"
     Sleep 100
-    MsgBox data["workType"]
     try {
         loopCount := Integer(data["workType"])
         if (loopCount > 0)
             SendSleep("{down " loopCount "}", 250)
-    } catch as e{
+    } catch as e {
         MsgBox("작업구분 데이터 오류", "선로출입관리", "icon!")
         return
     }
@@ -161,7 +165,7 @@ RunTrackAccess(data) {
 
     ; (13) 운행from
     SendSleep("{tab}", 100)
-    if (data["workFrom"] != "")
+    if data["workType"] == 2
         Send data["workFrom"] "{enter}"
 
     ; (14) 작업from
@@ -177,17 +181,17 @@ RunTrackAccess(data) {
     if (data["workTo"] != "")
         SendSleep(data["workTo"] "{enter}", 100)
 
-    if data["workType"] == 3 or data["workType"] == 6 { ;모터카 출고시
+    if 모터카 { ;모터카 출고시
         SendSleep("{tab 3}", 100)
         ;if data["bunso"] == "호포전기분소"
-           SendSleep("{down}", 100)
+        SendSleep("{down}", 100)
 
         ;철도장비사용수량
-        SendSleep("{tab}",100)
+        SendSleep("{tab}", 100)
         Send "1"
     }
     else
-        SendSleep("{tab 2}",100)
+        SendSleep("{tab 2}", 100)
 
     ; (18) 운전원
     SendSleep("{tab}", 100)
@@ -230,7 +234,7 @@ RunTrackAccess(data) {
 
     ; (22) 철도운행안전관리자
     SendSleep("{tab 2}", 100)
-    if data["workType"] == 3 or data["workType"] == 6 ;모터카 출고시
+    if 모터카 ;모터카 출고시
         SendSleep("{tab 2}", 100)
 
     if (data["safetyName"] != "")
@@ -240,20 +244,25 @@ RunTrackAccess(data) {
 
     ; (23) 철도운행협의서
     SendSleep("{tab 5}", 100)
-    if data["workType"] == 3 or data["workType"] == 6 { ;모터카 출고시
+    if 모터카 { ;모터카 출고시
         SendSleep("{enter}", 100)
-        WinWaitActive("철도운행안전협의")
+        if !hwnd:=WinWaitActive("철도운행안전협의",,3)
+            MsgBox "철도운행안전협의 선택창 오류"
+
+        MsgBox "철도운행안전협의서를 선택해 주세요", "선로출입관리", "iconi"
+        /* 최적화된 매크로 로직 구현 후 주석 해제
         Sleep 100
         SendSleep("{tab 3}", 100)
         SendSleep("{down}", 100)
         SendSleep("{tab}", 100)
         SendSleep("{enter}", 100)
-        WinWaitClose("철도운행안전협의", , 3)
+        */
+        WinWaitClose(hwnd)
     }
 
     ; (24) 운행to
     SendSleep("{tab 12}", 100)
-    if (data["opEnd"] != "" && data["workTo"] != "")
+    if data["workType"] == 2
         Send data["workTo"] "{enter}"
 
     ; (25) 저장
@@ -312,43 +321,10 @@ RunTrackAccess(data) {
     }
 
     MsgBox "입력이 완료되었습니다. 내용을 확인하세요.", "완료", "iconi"
+    WinRestore(originalId)
 }
 
 ; --- Helper Functions ---
-
-GetBrowserExe() {
-    ; ConfigManager에서 브라우저 설정을 가져오거나 기본값 반환
-    browser := ConfigManager.Get("appSettings.browser")
-
-    if (browser == "") {
-        ; 기본값: Edge
-        browser := "msedge.exe"
-    } else {
-        ; 'msedge.exe' 형태가 아니라면 추가 검증 필요할 수 있음
-        if !InStr(browser, ".exe")
-            browser .= ".exe"
-    }
-    return browser
-}
-
-login_start(browser) {
-    if (browser == "")
-        browser := "msedge.exe"
-
-    Run browser " https://btcep.humetro.busan.kr/user/login.face?destination=%2Fportal%2F"
-    if WinWaitActive(":: 부산교통공사", , 30) {
-        Sleep 500
-        MsgBox "로그인을 해주세요", , "T5"
-    }
-    if !WinWait(":: 부산교통공사 :: ", , 30) {
-        MsgBox "timeout - 로그인 대기 시간 초과"
-        return
-    }
-
-    Sleep 2000
-    ; SSO 설치 페이지(실제 업무 페이지 등) 호출
-    Run browser " https://mis.humetro.busan.kr/FS/xui/install/x_installChromeSSO.jsp?gv_selSystGubn=LA&gv_userBrowser=Edg"
-}
 
 SendSleep(keys, delay) {
     Send keys

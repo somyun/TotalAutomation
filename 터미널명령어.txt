@@ -1,5 +1,0 @@
-컴파일
-& "C:\Program Files\AutoHotkey\Compiler\Ahk2Exe.exe" /in "\\songnas\home\Drive\업무\자동화\통합자동화_v3\Main.ahk" /base "C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe" /out "\\songnas\home\Drive\업무\자동화\통합자동화_v3\Main.exe"; Start-Sleep -Seconds 1; if ($?) { Write-Host "컴파일 성공! 실행합니다..."; & "\\songnas\home\Drive\업무\자동화\통합자동화_v3\Main.exe" } 
-
-ahk바로 실행
-& "C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe" "\\songnas\home\Drive\업무\자동화\통합자동화_v3\Main.ahk"

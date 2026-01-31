@@ -49,6 +49,7 @@ class WorkLogManager {
                 if (userTeam == teamDay) {
                     ; 주간 컨텍스트 강제
                     isNight := false
+                    targetDate := now
                     currentTeam := teamDay
                 }
             }
@@ -69,12 +70,10 @@ class WorkLogManager {
         if (!isNight) { ; 현재 주간
             prevTeam := this.CalculateTeam(DateAdd(targetDate, -1, "Days"), true) ; 전날 야간
             nextTeam := this.CalculateTeam(targetDate, true)                      ; 오늘 야간
-
             shiftName := "주간"
         } else { ; 현재 야간
             prevTeam := this.CalculateTeam(targetDate, false)                     ; 오늘 주간
             nextTeam := this.CalculateTeam(DateAdd(targetDate, 1, "Days"), false) ; 내일 주간
-
             shiftName := "야간"
         }
 
@@ -116,9 +115,10 @@ class workers {
     Weekday := true
     schedule := ""
 
-    ;일지생성 야간 작성/승인자
-    nightwriter := ""               ;야간작성자
-    nightapprover := ""             ;야간승인자
+    ;일지생성 야간 작성/검토자 승인자
+    nightMaker := ""               ;야간작성자
+    nightChecker := ""             ;야간검토자
+    approver := ""                  ;승인자
 
     ;인수자
     handover := ""                  ;인수자
@@ -147,6 +147,18 @@ class workers {
 
     ; 생성자: app.js에서 전달받은 data 객체를 직접 파싱하여 초기화합니다.
     __New(data) {
+
+        ; 0. 승인자(분소장) 설정
+        try {
+            colleagues := ConfigManager.Get("appSettings")["colleagues"]
+            for col in colleagues {
+                if (col.Has("isManager") && col["isManager"]) {
+                    this.approver := col["name"]
+                    break
+                }
+            }
+        }
+
         ; 1. 스케줄 설정 (app.js: workType="day"/"night")
         this.schedule := (data.Has("workType") && data["workType"] == "day") ? "주간" : "야간"
         this.day := (this.schedule == "주간")
@@ -158,7 +170,6 @@ class workers {
 
         for _worker in workerList {
             name := _worker["name"]
-            ; app.js: reason(휴가/비고)와 team(근무조) 분리 수신
             reason := _worker.Has("reason") ? _worker["reason"] : ""
             team := _worker.Has("team") ? _worker["team"] : ""
             attend := _worker["attend"]
@@ -175,7 +186,7 @@ class workers {
             }
 
             if !attend {
-                if !((name == "분소장" or team == "일근") and !this.weekday) {
+                if team != "일근" or this.weekday {
                     this.absentCnt++
                     if (reason != "") { ; 사유가 있을 때만 집계
                         if !this._vacaReason.Has(reason)
@@ -201,10 +212,10 @@ class workers {
                 this.attendCnt++						;참석자 체크
 
                 ;안전
-                if name != "분소장" and this.firstWorker == ""		;최선임자가
+                if this.approver != name and this.firstWorker == ""		;최선임자가
                     this.firstWorker := name						;조책임자
                 else
-                    if !(name == "분소장" or team == "일근") ; 일근자 제외
+                    if team != "일근" ; 일근자 제외
                         this.workers .= name ", "
 
                 ;운전적합성 검사자 (자동 지정 로직 - 명시적 지정이 없을 때 동작)
@@ -232,7 +243,7 @@ class workers {
 
             }
 
-        }	;인원파악 끝
+        }
 
         this.TotalCnt := this.attendCnt + this.absentCnt
         this.workers := SubStr(this.workers, 1, -2)
@@ -243,7 +254,7 @@ class workers {
             this.TrackSafetyManager := ""
 
         ; --------------------------------------------------------------------------
-        ; [New] 인수자 및 야간 근무자(작성/승인) 자동 계산 로직
+        ; 기본정보인원 및 인수자 자동 계산 로직
         ; --------------------------------------------------------------------------
         try {
             ; 1. 현재 유저의 근무조 확인
@@ -258,7 +269,7 @@ class workers {
                 ; WorkLogManager.GetCurrentContext(currentUserTeam)을 호출하면
                 ; 현재 시간과 내 근무조에 맞는 'Next' 팀을 반환함.
                 context := WorkLogManager.GetCurrentContext(currentUserTeam)
-                nextTeam := context["next"]
+                nextTeam := context["next"] "조"
 
                 ; 3. 전체 직원 명단에서 다음 근무조 인원 필터링
                 allColleagues := ConfigManager.Get("appSettings")["colleagues"]
@@ -267,6 +278,7 @@ class workers {
                 for col in allColleagues {
                     if (col.Has("team") && col["team"] == nextTeam) {
                         nextTeamMembers.Push(col)
+                        ;msg .= col["id"] " " col["name"] "`n"
                     }
                 }
 
@@ -295,16 +307,18 @@ class workers {
                     ; 5. 인수자 (항상 다음 근무조 최선임)
                     this.handover := senior
 
-                    ; 6. 야간 작성자/승인자 (주간 근무일 때만 필요)
-                    if (this.day) {
-                        this.nightwriter := junior  ; 야간 최후임
-                        this.nightapprover := senior ; 야간 최선임
+                    ; 6. 야간 작성자/검토자 (주간 근무일 때만 필요)
+                    if this.day {
+                        this.nightMaker := junior  ; 야간 최후임
+                        this.nightChecker := senior ; 야간 최선임
                     }
+
                 }
+
             }
         } catch as e {
-            ; 오류 발생 시 기본값 유지 (공란)
-            ; MsgBox("인수자 계산 중 오류: " e.Message)
+            MsgBox("인원 파악 중 오류: " e.Message)
+            OnExitApp()
         }
     }	;생성자 끝
 
@@ -384,6 +398,7 @@ class RunWorkLog {
                 this.CreateLog()
             else {
                 MsgBox("일지 생성 준비에 실패하였습니다.", "알림", "IconStop")
+                StopMacro()
                 return false
             }
         }
@@ -394,6 +409,7 @@ class RunWorkLog {
                 this.GeneralWork()
             else {
                 MsgBox("일지 조회 준비에 실패하였습니다.", "알림", "IconStop")
+                StopMacro()
                 return false
             }
         }
@@ -404,6 +420,7 @@ class RunWorkLog {
                 this.SafeManage()
             else {
                 MsgBox("일지 조회 준비에 실패하였습니다.", "알림", "IconStop")
+                StopMacro()
                 return false
             }
         }
@@ -414,6 +431,7 @@ class RunWorkLog {
                 this.DrivingCheck()
             else {
                 MsgBox("일지 조회 준비에 실패하였습니다.", "알림", "IconStop")
+                StopMacro()
                 return false
             }
         }
@@ -424,21 +442,18 @@ class RunWorkLog {
     EnsureReady(type) {
         this.cUIA := WebAutoLogin.EnsureReady(type)
         if (!this.cUIA) {
-            StopMacro()
             return false
         }
         return true
     }
 
     CreateLog() {
-        approver := this.data.Has("approver") ? this.data["approver"] : "이윤수"
-        nightMaker := this.data.Has("nightMaker") ? this.data["nightMaker"] : "황혁수"
-        nightChecker := this.data.Has("nightChecker") ? this.data["nightChecker"] : "조구형"
 
-        ;근무방식, 기존 컨트롤클릭
-        ;this.cUIA.WaitElement({ AutomationId: "I_GYELJAE" }, 3000).ControlClick("left")
-        ;this.cUIA.send "{down}{enter}"
+        approver := this.workers.approver ? this.workers.approver : InputBox("분소장 성함")
+        nightMaker := this.workers.nightMaker ? this.workers.nightMaker : InputBox("야간 작성자 성함")
+        nightChecker := this.workers.nightChecker ? this.workers.nightChecker : InputBox("야간 승인자 성함")
 
+        ;일근/교대 선택
         comboBox := this.cUIA.WaitElement({ AutomationId: "I_GYELJAE" }, 3000)
         comboBox.expand()
         Sleep 50
@@ -447,16 +462,16 @@ class RunWorkLog {
         comboBox.collapse()
 
         ;검토자
-        일근 := this.cUIA.WaitElement({ AutomationId: "pernrView1" }, 3000)
-        if 일근.WaitElement({ AutomationId: "I_PERNR12_TEXT" }).value != this.workers.firstWorker {
-            일근.WaitElement({ Type: "Image", Name: "검토자" }).Invoke()
+        주간 := this.cUIA.WaitElement({ AutomationId: "pernrView1" }, 3000)
+        if 주간.WaitElement({ AutomationId: "I_PERNR12_TEXT" }).value != this.workers.firstWorker {
+            주간.WaitElement({ Type: "Image", Name: "검토자" }).Invoke()
             lensInput(this.cUIA.browserID, , this.workers.firstWorker)	;부서, 이름 검색 후 클릭
         }
 
         ;승인자
         WinWaitActive(this.cUIA.browserID)
-        if 일근.WaitElement({ AutomationId: "I_PERNR13_TEXT" }).value != approver {
-            일근.WaitElement({ Type: "Image", Name: "승인자" }).Invoke()
+        if 주간.WaitElement({ AutomationId: "I_PERNR13_TEXT" }).value != approver {
+            주간.WaitElement({ Type: "Image", Name: "승인자" }).Invoke()
             lensInput(this.cUIA.browserID, , approver)
         }
 

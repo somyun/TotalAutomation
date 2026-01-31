@@ -1,0 +1,17 @@
+# 푸시 안 할 파일들
+
+# 설정파일
+config.json
+
+# 빌드/배포용 폴더 제외
+dist/
+build/
+debug_bg.txt
+debug_main.txt
+
+#테스트용 파일 제외
+.restart_login
+restore_state.json
+NetworkTest.ahk
+test.json
+터미널명령어.txt

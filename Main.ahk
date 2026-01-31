@@ -18,14 +18,14 @@
 ; ==============================================================================
 ; 컴파일러 지시문
 ; ==============================================================================
-;@Ahk2Exe-SetVersion 3.1.2.0
-;@Ahk2Exe-SetProductVersion v3.1.2
+;@Ahk2Exe-SetVersion 3.2.3.0
+;@Ahk2Exe-SetProductVersion v3.2.3
 ;@Ahk2Exe-SetDescription 통합자동화
 ; ==============================================================================
 ; ==============================================================================
 ; 초기화
 ; ==============================================================================
-global AppVersion := "v3.1.2"
+global AppVersion := "v3.2.3"
 global wvc := ""
 global wv := ""
 global MainGui := ""
@@ -36,7 +36,7 @@ if !ConfigManager.Load()
 
 ; 복호화 실패로 암호가 초기화되었을 경우 알림 메시지 출력
 if (ConfigManager.NeedsPasswordReset) {
-    MsgBox("프로그램 위치 변경 또는 파일 복사로 인해 보안상 저장된 비밀번호가 초기화되었습니다.`n`n[설정] > [내 정보] 메뉴에서 비밀번호를 다시 입력해주세요.", "보안 알림", "Iconi")
+    MsgBox("프로그램 위치 변경 또는 복사가 감지되어`n저장된 비밀번호가 초기화되었습니다.`n`n[설정] > [내 정보] 메뉴에서 비밀번호를 다시 입력해주세요.", "보안 알림", "Iconi")
 }
 
 ; ==============================================================================
@@ -47,11 +47,11 @@ if (ConfigManager.NeedsPasswordReset) {
 if (A_IsCompiled) {
     try {
         ; 0. 보조 프로세스 정리 (파일 덮어쓰기 위해 강제 종료)
-        ProcessClose("통합백그라운드.exe")
+        ProcessClose("dist.exe")
 
-        ; 1. 실행 파일
+        ; 1. 실행 파일 (updater.exe 및 dist.zip)
         FileInstall("Updater.exe", A_ScriptDir "\Updater.exe", 1)
-        FileInstall("통합백그라운드.exe", A_ScriptDir "\통합백그라운드.exe", 1)
+        FileInstall("dist.zip", A_ScriptDir "\dist.zip", 1)
 
         ; 2. 라이브러리 (DLL)
         if !DirExist(A_ScriptDir "\Lib\64bit")
@@ -91,47 +91,67 @@ if (A_IsCompiled && !skipUpdate) {
 }
 
 ; ------------------------------------------------------------------------------
-; 통합백그라운드.exe 배포 및 업데이트 관리
+; 초기화 시퀀스 (비동기 호출)
 ; ------------------------------------------------------------------------------
-; 설명: Main.exe에 통합백그라운드.exe를 포함(FileInstall)시키고,
-;       실행 시 버전이 낮거나 파일이 없으면 추출하여 업데이트합니다.
-; ------------------------------------------------------------------------------
-bgExePath := A_ScriptDir "\통합백그라운드.exe"
-targetBgVer := "1.0.0.0" ; [주의] 통합백그라운드.ahk의 SetVersion과 일치시켜야 함
+PerformReadySequence() {
+    CheckBackgroundSetup() ; 오버레이 표시 -> Unzip(차단) -> 오버레이 숨김 -> 프로세스 시작
 
-needsBgUpdate := false
-if !FileExist(bgExePath) {
-    needsBgUpdate := true
-} else {
-    try {
-        currentBgVer := FileGetVersion(bgExePath)
-        if (VerCompare(currentBgVer, targetBgVer) < 0) {
-            needsBgUpdate := true
+    ; 이하 기존 Ready 로직
+    profiles := ConfigManager.GetProfiles()
+    payload := Map("type", "initLogin", "users", profiles)
+    wv.PostWebMessageAsJson(JSON.stringify(payload))
+
+    ; 자동 로그인 복구 초기화
+    restartFile := A_ScriptDir "\.restart_login"
+    if FileExist(restartFile) {
+        try {
+            savedID := FileRead(restartFile)
+            FileDelete(restartFile)
+            if (savedID != "") {
+                ; 복구 로그인 시에도 AHK 내부 상태 동기화 (아래의 로그인 처리와 동일)
+                ConfigManager.Set("appSettings.lastUser", savedID)
+
+                userRoot := ConfigManager.GetUserRoot(savedID)
+                profile := userRoot.Has("profile") ? userRoot["profile"] : Map("id", savedID, "name", "Unknown")
+                ConfigManager.CurrentUser := profile
+                LoadConfigData()
+
+                payload := Map("type", "loginSuccess", "profile", profile)
+
+                jsonResp := JSON.stringify(payload)
+                wv.PostWebMessageAsJson(jsonResp)
+
+                ; [추가] 근무 조 정보 전송 (복구 시에도 업데이트)
+                userTeam := profile.Has("team") ? profile["team"] : ""
+                shiftContext := WorkLogManager.GetCurrentContext(userTeam)
+                shiftPayload := Map("type", "updateShiftStatus", "data", shiftContext)
+                wv.PostWebMessageAsJson(JSON.stringify(shiftPayload))
+
+                ; UI 상태 복원 (로그인 복구 후 실행)
+                stateFile := A_ScriptDir "\.restore_state.json"
+                if FileExist(stateFile) {
+                    try {
+                        jsonStr := FileRead(stateFile)
+                        FileDelete(stateFile)
+                        if (jsonStr != "") {
+                            state := JSON.parse(jsonStr)
+                            payload := Map("type", "restoreUiState", "data", state)
+                            wv.PostWebMessageAsJson(JSON.stringify(payload))
+                        }
+                    }
+                }
+
+                ; [추가] 작업보고.sap 파일 갱신 (자동 로그인)
+                UpdateSapFile(savedID)
+
+                ; [추가] 자동 종료 타이머 시작
+                StartAutoExitTimer(profile)
+            }
         }
-    } catch {
-        needsBgUpdate := true ; 버전 정보를 읽을 수 없으면 업데이트 대상
     }
-}
 
-if (needsBgUpdate) {
-    try {
-        LogDebug("[Update] 통합백그라운드 업데이트 시작... (Target: " targetBgVer ")")
-
-        ; 실행 중인 프로세스 종료
-        if ProcessExist("통합백그라운드.exe") {
-            ProcessClose("통합백그라운드.exe")
-            ProcessWaitClose("통합백그라운드.exe", 2)
-        }
-
-        ; 파일 덮어쓰기 (FileInstall은 컴파일 시 파일을 포함시킴)
-        ; [주의] 첫 번째 인자는 변수가 아닌 문자열 리터럴이어야 합니다.
-        FileInstall "통합백그라운드.exe", bgExePath, 1
-
-        LogDebug("[Update] 통합백그라운드 업데이트 완료")
-    } catch as e {
-        LogDebug("[Update] 통합백그라운드 설치 실패: " e.Message)
-        ; 실패해도 실행은 계속 시도 (치명적이지 않다고 가정하거나 경고 표시)
-    }
+    ; ERP 상태 폴링 시작
+    ERP점검.StartPolling()
 }
 
 ; ==============================================================================
@@ -141,6 +161,103 @@ LogDebug(text) {
     try {
         FileAppend(FormatTime(A_Now, "yyyy-MM-dd HH:mm:ss") " [Main] " text "`n", A_ScriptDir "\debug_main.txt",
         "UTF-8")
+    }
+}
+
+UnzipFile(zipPath, destDir) {
+    shell := ComObject("Shell.Application")
+    if !DirExist(destDir)
+        DirCreate(destDir)
+
+    try {
+        zipFolder := shell.NameSpace(zipPath)
+        destFolder := shell.NameSpace(destDir)
+
+        if (zipFolder && destFolder) {
+            ; 4 (No Progress UI) + 16 (Yes to All)
+            destFolder.CopyHere(zipFolder.Items, 20)
+            Sleep 1000
+        }
+    } catch as e {
+        throw Error("Unzip failed: " e.Message)
+    }
+}
+
+; ------------------------------------------------------------------------------
+; 백그라운드 설정 및 실행 (지연 실행)
+; ------------------------------------------------------------------------------
+CheckBackgroundSetup() {
+    bgDir := A_ScriptDir "\dist"
+    bgExePath := bgDir "\dist.exe"
+    zipPath := A_ScriptDir "\dist.zip"
+
+    needsBgUpdate := false
+
+    ; 1. 폴더나 실행파일이 없으면 설치 필요
+    if (!DirExist(bgDir) || !FileExist(bgExePath)) {
+        needsBgUpdate := true
+    }
+    ; 2. _internal 폴더가 없으면 (손상 의심) 설치 필요
+    else if (!DirExist(bgDir "\_internal")) {
+        needsBgUpdate := true
+    }
+
+    if FileExist(zipPath) {
+        if needsBgUpdate {
+            try {
+                LogDebug("[Update] 백그라운드 프로세스 초기 구성 시작...")
+
+                ; UI에 로딩 오버레이 표시 요청
+                if (wv) {
+                    wv.PostWebMessageAsJson(JSON.stringify(Map("type", "showInitOverlay", "message",
+                        "초기 구성 중입니다... (최초 1회, 약 30초 소요)")))
+                    Sleep 100 ; UI 렌더링 대기
+                }
+
+                ; 실행 중인 프로세스 종료
+                if ProcessExist("dist.exe") {
+                    ProcessClose("dist.exe")
+                    ProcessWaitClose("dist.exe", 2)
+                }
+
+                try RunWait "taskkill /F /IM chromedriver.exe", , "Hide" ;
+
+                ; 기존 폴더 삭제
+                if DirExist(bgDir) {
+                    try DirDelete(bgDir, 1)
+                }
+
+                ; 압축 해제 (Blocking)
+                DirCreate(bgDir)
+                UnzipFile(zipPath, bgDir)
+
+                LogDebug("[Update] 백그라운드 프로세스 구성 완료")
+
+                ; Setup 완료 후 잠시 대기
+                Sleep 100
+
+            } catch as e {
+                LogDebug("[Update] 백그라운드 설치 실패: " e.Message)
+                MsgBox("백그라운드 구성 실패: " e.Message)
+            }
+        }
+
+        FileDelete(zipPath)
+
+    }
+
+    ; 3. 백그라운드 프로세스 실행
+    if FileExist(bgExePath) {
+        if (BackgroundProcessManager.hProcess == 0) {
+            LogDebug("[Startup] 백그라운드 프로세스 시작")
+            cmdLink := Format('"{1}"', bgExePath)
+            BackgroundProcessManager.Launch(cmdLink, OnBackgroundLog)
+        }
+    }
+
+    ; UI 오버레이 제거 요청
+    if (wv) {
+        wv.PostWebMessageAsJson(JSON.stringify(Map("type", "hideInitOverlay")))
     }
 }
 
@@ -281,12 +398,16 @@ OnExitApp(*) {
     try FileDelete(loginFile)
     try FileDelete(erpTempFile)
 
-    ; 2. 백그라운드 curl 종료
+    ; 2. 백그라운드 curl, chromedriver 종료
     try Run "taskkill /F /IM curl.exe", , "Hide"
+    try Run "taskkill /F /IM chromedriver.exe", , "Hide"
 
     ; 3. Headless Browser (포트 9222) 정리
     ; 통합백그라운드 프로세스 정리
-    try ProcessClose("통합백그라운드.exe")
+    try ProcessClose("dist.exe")
+
+    ; 백그라운드 매니저 정리
+    BackgroundProcessManager.Cleanup()
 
     ; 9222 포트 크롬 강제 종료 (Headless.ahk의 ForceKill 로직과 유사하게 직접 처리)
     try {
@@ -331,61 +452,9 @@ OnWebMessage(sender, args) {
 
     ; --- 1. 초기화 및 로그인 ---
     if (command == "ready") {
-        profiles := ConfigManager.GetProfiles()
-        payload := Map("type", "initLogin", "users", profiles)
-        wv.PostWebMessageAsJson(JSON.stringify(payload))
-
-        ; 자동 로그인 복구 초기화
-        restartFile := A_ScriptDir "\.restart_login"
-        if FileExist(restartFile) {
-            try {
-                savedID := FileRead(restartFile)
-                FileDelete(restartFile)
-                if (savedID != "") {
-                    ; 복구 로그인 시에도 AHK 내부 상태 동기화 (아래의 로그인 처리와 동일)
-                    ConfigManager.Set("appSettings.lastUser", savedID)
-
-                    userRoot := ConfigManager.GetUserRoot(savedID)
-                    profile := userRoot.Has("profile") ? userRoot["profile"] : Map("id", savedID, "name", "Unknown")
-                    ConfigManager.CurrentUser := profile
-                    LoadConfigData()
-
-                    payload := Map("type", "loginSuccess", "profile", profile)
-
-                    jsonResp := JSON.stringify(payload)
-                    wv.PostWebMessageAsJson(jsonResp)
-
-                    ; [추가] 근무 조 정보 전송 (복구 시에도 업데이트)
-                    userTeam := profile.Has("team") ? profile["team"] : ""
-                    shiftContext := WorkLogManager.GetCurrentContext(userTeam)
-                    shiftPayload := Map("type", "updateShiftStatus", "data", shiftContext)
-                    wv.PostWebMessageAsJson(JSON.stringify(shiftPayload))
-
-                    ; UI 상태 복원 (로그인 복구 후 실행)
-                    stateFile := A_ScriptDir "\.restore_state.json"
-                    if FileExist(stateFile) {
-                        try {
-                            jsonStr := FileRead(stateFile)
-                            FileDelete(stateFile)
-                            if (jsonStr != "") {
-                                state := JSON.parse(jsonStr)
-                                payload := Map("type", "restoreUiState", "data", state)
-                                wv.PostWebMessageAsJson(JSON.stringify(payload))
-                            }
-                        }
-                    }
-
-                    ; [추가] 작업보고.sap 파일 갱신 (자동 로그인)
-                    UpdateSapFile(savedID)
-
-                    ; [추가] 자동 종료 타이머 시작
-                    StartAutoExitTimer(profile)
-                }
-            }
-        }
-
-        ; ERP 상태 폴링 시작
-        ERP점검.StartPolling()
+        ; [UX 개선] 초기화 로직을 비동기(Timer)로 분리하여 WebView 응답성 확보
+        ; 바로 실행 시 Unzip 등으로 인해 UI 스레드가 차단될 수 있음
+        SetTimer PerformReadySequence, -10
     }
     else if (command == "tryLogin") { ; 로그인 처리
         uid := msg.Has("id") ? msg["id"] : ""
@@ -407,23 +476,36 @@ OnWebMessage(sender, args) {
             runName := profile.Has("name") ? profile["name"] : uid
 
             if (runWebPW != "" && runPW2 != "") {
-                LogDebug("백그라운드 실행 요청: ID=" uid ", WebPW길이=" StrLen(runWebPW))
+                LogDebug("IPC: 로그인 정보 전송 시도... (ID: " uid ")")
 
-                ; [수정] 통합백그라운드.exe 실행 (WScript.Shell.Exec)
-                bgExe := A_ScriptDir "\통합백그라운드.exe"
-                if !FileExist(bgExe) {
-                    MsgBox("통합백그라운드.exe 파일을 찾을 수 없습니다.", "오류")
-                    return
+                ; 1. 프로세스 상태 확인
+                if (BackgroundProcessManager.hProcess == 0) {
+                    LogDebug("경고: 백그라운드 프로세스가 실행 중이지 않습니다. 재시작합니다.")
+                    bgExe := A_ScriptDir "\dist\dist.exe"
+                    if FileExist(bgExe)
+                        BackgroundProcessManager.Launch(Format('"{1}"', bgExe), OnBackgroundLog)
+                    else {
+                        MsgBox("백그라운드 실행 파일이 없습니다: " bgExe)
+                        return
+                    }
                 }
 
-                cmd := Format('"{1}" --id "{2}" --pw "{3}" --pw2 "{4}"', bgExe, uid, runWebPW, runPW2)
-                shell := ComObject("WScript.Shell")
+                ; 2. JSON 명령 생성
+                loginCmd := Map(
+                    "type", "login",
+                    "id", uid,
+                    "pw", runWebPW,
+                    "pw2", runPW2
+                )
+                jsonStr := JSON.stringify(loginCmd, 0)
 
-                ; 전역 변수에 저장하여 타이머에서 접근 가능하게 함
-                global BackgroundExec := shell.Exec(cmd)
-
-                ; 모니터링 타이머 시작 (100ms 간격)
-                SetTimer CheckBackgroundOutput, 100
+                ; 3. IPC 전송
+                if (BackgroundProcessManager.SendInput(jsonStr)) {
+                    LogDebug("IPC: 자격 증명 전송 완료")
+                } else {
+                    LogDebug("IPC: 전송 실패 (WriteFile Error)")
+                    MsgBox("백그라운드 통신 실패")
+                }
 
             } else {
                 LogDebug("백그라운드 실행 생략: 비밀번호(webPW, pw2) 정보 부족")
@@ -555,7 +637,7 @@ OnWebMessage(sender, args) {
     else if (command == "getReleaseNotes") { ; 릴리즈 노트 조회
         repo := "MyungjinSong/TotalAutomation"
 
-        url := "https://api.github.com/repos/" repo "/releases?per_page=5"
+        url := "https://api.github.com/repos/" repo "/releases?per_page=100"
 
         try {
             whr := ComObject("WinHttp.WinHttpRequest.5.1")
@@ -569,13 +651,15 @@ OnWebMessage(sender, args) {
                 payload := Map("type", "releaseNotes", "data", releases)
                 wv.PostWebMessageAsJson(JSON.stringify(payload))
             } else {
-                wv.PostWebMessageAsJson(JSON.stringify(Map("type", "releaseNotes", "error", "GitHub API Error: " whr.Status
+                wv.PostWebMessageAsJson(JSON.stringify(Map("type", "releaseNotes", "error", "GitHub API Error: " whr
+                    .Status
                 )))
             }
         } catch as e {
             wv.PostWebMessageAsJson(JSON.stringify(Map("type", "releaseNotes", "error", e.Message)))
         }
     }
+
     ; --- 5. 기타 및 상태 저장 ---
     else if (command == "saveUiState") {
         if (msg.Has("data")) {
@@ -624,7 +708,7 @@ OnWebMessage(sender, args) {
             LogDebug("Headless 연결 시도 (Attach Mode)...")
             headless := HeadlessAutomation(true, LogDebug)
 
-            arbpl := msg.Has("arbpl") ? msg["arbpl"] : "P140"
+            arbpl := msg.Has("arbpl") ? msg["arbpl"] : "5129"
             LogDebug("작업장 코드: " arbpl)
 
             workers := headless.GetWorkerList(arbpl)
@@ -846,7 +930,7 @@ EndMacro(*) {
 }
 
 ; ==============================================================================
-; 비동기 작업 실행기 (개발 중)
+; 비동기 작업 실행기
 ; ==============================================================================
 ; 설명:
 ;   WebView에서 'runTask' 명령으로 전달된 작업을 수행합니다.
@@ -1026,89 +1110,92 @@ CheckAutoExit() {
     }
 }
 
-; ==============================================================================
-; 백그라운드 프로세스 모니터링 (Python StdOut)
-; ==============================================================================
-CheckBackgroundOutput() {
-    global BackgroundExec
+OnBackgroundLog(line) {
+    if (line == "")
+        return
 
-    if !IsSet(BackgroundExec) || !BackgroundExec {
-        SetTimer CheckBackgroundOutput, 0 ; 타이머 중지
+    ; [Debug] 모든 로그 기록
+    LogDebug("[BG] " line)
+
+    ; [State] 상태 메시지 처리
+    if (SubStr(line, 1, 6) == "STATE:") {
+        state := SubStr(line, 7)
+        LogDebug("[BG State] " state)
+
+        if (state == "BG_START") {
+            ;TrayTip "백그라운드 프로세스가 시작되었습니다.", "알림", 1
+        }
+        else if (state == "LOGIN_OK") {
+            HandleLoginSuccess()
+        }
+        else if (state == "LOGIN_FAIL") {
+            HandleLoginFail()
+        }
         return
     }
 
-    try {
-        ; 사용자 이름 가져오기
-        userName := (ConfigManager.CurrentUser.Has("name")) ? ConfigManager.CurrentUser["name"] : "사용자"
-        baseTitle := "통합자동화 v3 - " . userName
-
-        ; StdOut 읽기
-        while !BackgroundExec.StdOut.AtEndOfStream {
-            line := BackgroundExec.StdOut.ReadLine()
-
-            ; 타이틀 포맷팅
-            statusTitle := baseTitle . " - " . line
-
-            ; UI 타이틀 업데이트 (WebMessage 전송)
-            if (wv) {
-                payload := Map("type", "updateTitle", "title", statusTitle)
-                wv.PostWebMessageAsJson(JSON.stringify(payload))
-            }
-
-            if (line = "Ready") {
-                ; 준비 완료 -> Headless 연결 시도
-                readyTitle := baseTitle . " - ERP 연결 중..."
-                if (wv) {
-                    payload := Map("type", "updateTitle", "title", readyTitle)
-                    wv.PostWebMessageAsJson(JSON.stringify(payload))
-                }
-
-                try {
-                    ; 1. Headless 연결 (Attach)
-                    headless := HeadlessAutomation.Connect(LogDebug)
-
-                    finalTitle := baseTitle . " - 실행 중"
-                    if (wv) {
-                        payload := Map("type", "updateTitle", "title", finalTitle)
-                        wv.PostWebMessageAsJson(JSON.stringify(payload))
-                    }
-
-                } catch as e {
-                    LogDebug("Headless 연결 실패: " e.Message)
-                    errTitle := baseTitle . " - 연결 실패"
-                    if (wv) {
-                        payload := Map("type", "updateTitle", "title", errTitle)
-                        wv.PostWebMessageAsJson(JSON.stringify(payload))
-                    }
-                }
-
-                ; 타이머 종료
-                SetTimer CheckBackgroundOutput, 0
-                BackgroundExec := ""
-                break
-            }
-
-            if (line = "Fail") {
-                failTitle := baseTitle . " - 로그인 실패"
-                if (wv) {
-                    payload := Map("type", "updateTitle", "title", failTitle)
-                    wv.PostWebMessageAsJson(JSON.stringify(payload))
-                }
-                MsgBox("로그인에 실패했습니다. 아이디/비밀번호를 확인해주세요.", "로그인 실패")
-                SetTimer CheckBackgroundOutput, 0
-                BackgroundExec := ""
-                break
-            }
-        }
-
-        ; 프로세스가 종료되었는지 확인
-        if (BackgroundExec && BackgroundExec.Status != 0) {
-            SetTimer CheckBackgroundOutput, 0
-            BackgroundExec := ""
-            ; 종료 시 타이틀 복원 로직은 필요하다면 여기에 추가
-        }
-    } catch {
-        SetTimer CheckBackgroundOutput, 0
-        BackgroundExec := ""
+    ; [Legacy Compatibility] "Ready", "Fail" 문자열 처리
+    if (line == "Ready") {
+        HandleLoginSuccess()
+        return
     }
+    if (line == "Fail") {
+        HandleLoginFail()
+        return
+    }
+
+    ; [Default] 일반 메시지는 타이틀바 업데이트 (사용자 요청으로 제거)
+    ; userName := (ConfigManager.CurrentUser.Has("name")) ? ConfigManager.CurrentUser["name"] : "사용자"
+    ; baseTitle := "통합자동화 v3 - " . userName
+    ; statusTitle := baseTitle . " - " . line
+
+    ; if (wv) {
+    ;    payload := Map("type", "updateTitle", "title", statusTitle)
+    ;    wv.PostWebMessageAsJson(JSON.stringify(payload))
+    ; }
+}
+
+HandleLoginSuccess() {
+    global wv
+    userName := (ConfigManager.CurrentUser.Has("name")) ? ConfigManager.CurrentUser["name"] : "사용자"
+    baseTitle := "통합자동화 v3 - " . userName
+
+    readyTitle := baseTitle . " - ERP 연결 중..."
+    if (wv) {
+        payload := Map("type", "updateTitle", "title", readyTitle)
+        wv.PostWebMessageAsJson(JSON.stringify(payload))
+    }
+
+    try {
+        headless := HeadlessAutomation.Connect(LogDebug)
+        finalTitle := baseTitle . " - 일지연동 조회준비 완료"
+        if (wv) {
+            payload := Map("type", "updateTitle", "title", finalTitle)
+            wv.PostWebMessageAsJson(JSON.stringify(payload))
+            wv.PostWebMessageAsJson(JSON.stringify(Map("type", "headlessReady")))
+        }
+    } catch as e {
+        LogDebug("Headless 연결 실패: " e.Message)
+        errTitle := baseTitle . " - 연결 실패"
+        if (wv) {
+            payload := Map("type", "updateTitle", "title", errTitle)
+            wv.PostWebMessageAsJson(JSON.stringify(payload))
+        }
+    }
+
+    BackgroundProcessManager.Cleanup()
+}
+
+HandleLoginFail() {
+    global wv
+    userName := (ConfigManager.CurrentUser.Has("name")) ? ConfigManager.CurrentUser["name"] : "사용자"
+    baseTitle := "통합자동화 v3 - " . userName
+
+    failTitle := baseTitle . " - 로그인 실패"
+    if (wv) {
+        payload := Map("type", "updateTitle", "title", failTitle)
+        wv.PostWebMessageAsJson(JSON.stringify(payload))
+    }
+    MsgBox("로그인에 실패했습니다.", "실패")
+    BackgroundProcessManager.Cleanup()
 }

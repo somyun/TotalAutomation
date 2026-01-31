@@ -2,14 +2,6 @@
   "appSettings":{
     "colleagues":[
       {
-        "driverRole":"-",
-        "id":"111234",
-        "isManager":1,
-        "name":"이윤수",
-        "phone":"",
-        "team":"일근"
-      },
-      {
         "driverRole":"부",
         "id":"112780",
         "isManager":0,
@@ -51,17 +43,113 @@
       },
       {
         "driverRole":"-",
-        "id":"112355",
+        "id":"112667",
+        "isManager":1,
+        "name":"이윤수",
+        "phone":"",
+        "team":"일근"
+      },
+      {
+        "driverRole":"-",
+        "id":"112946",
         "isManager":0,
-        "name":"A조원",
+        "name":"윤종혁",
+        "phone":"",
+        "team":"C조"
+      },
+      {
+        "driverRole":"-",
+        "id":"112787",
+        "isManager":0,
+        "name":"임동환",
+        "phone":"",
+        "team":"B조"
+      },
+      {
+        "driverRole":"-",
+        "id":"112937",
+        "isManager":0,
+        "name":"조구형",
         "phone":"",
         "team":"A조"
       },
       {
         "driverRole":"-",
-        "id":"112356",
+        "id":"114222",
         "isManager":0,
-        "name":"B조원",
+        "name":"박진우",
+        "phone":"",
+        "team":"A조"
+      },
+      {
+        "driverRole":"-",
+        "id":"114231",
+        "isManager":0,
+        "name":"박기덕",
+        "phone":"",
+        "team":"C조"
+      },
+      {
+        "driverRole":"-",
+        "id":"115203",
+        "isManager":0,
+        "name":"이병곤",
+        "phone":"",
+        "team":"A조"
+      },
+      {
+        "driverRole":"-",
+        "id":"115587",
+        "isManager":0,
+        "name":"서준혁",
+        "phone":"",
+        "team":"B조"
+      },
+      {
+        "driverRole":"-",
+        "id":"115618",
+        "isManager":0,
+        "name":"안동희",
+        "phone":"",
+        "team":"C조"
+      },
+      {
+        "driverRole":"-",
+        "id":"115716",
+        "isManager":0,
+        "name":"송봉주",
+        "phone":"",
+        "team":"B조"
+      },
+      {
+        "driverRole":"-",
+        "id":"116382",
+        "isManager":0,
+        "name":"박이삭",
+        "phone":"",
+        "team":"C조"
+      },
+      {
+        "driverRole":"-",
+        "id":"116426",
+        "isManager":0,
+        "name":"황혁수",
+        "phone":"",
+        "team":"A조"
+      },
+      {
+        "driverRole":"-",
+        "id":"117091",
+        "isManager":0,
+        "name":"이강산",
+        "phone":"",
+        "team":"C조"
+      },
+      {
+        "driverRole":"-",
+        "id":"117152",
+        "isManager":0,
+        "name":"박성은",
         "phone":"",
         "team":"B조"
       }
@@ -111,12 +199,12 @@
       {
         "name":"주공장",
         "order":"12578680",
-        "type":"전기실(그룹3)"
+        "type":"전기실(그룹2)"
       },
       {
         "name":"검사고",
         "order":"12578679",
-        "type":"전기실(그룹2)"
+        "type":"전기실(그룹3)"
       },
       {
         "name":"청사",
@@ -179,14 +267,16 @@
       ],
       "presets":{},
       "profile":{
+        "arbpl":"5129",
+        "autoExit":1,
         "department":"호포전기분소",
         "erpFormat":"summary",
         "id":"115073",
         "name":"송명진",
-        "pw2":"",
-        "sapPW":"ENC_2bEWQHL4k/wYhdejC/eKIg==",
+        "pw2":"ENC_uNpsvV6H2ViZsaEdODlZGw==",
+        "sapPW":"ENC_beca40hiPl43hTut+GLSiA==",
         "team":"D조",
-        "webPW":"ENC_2bEWQHL4k/wYhdejC/eKIg=="
+        "webPW":"ENC_beca40hiPl43hTut+GLSiA=="
       },
       "trackPresets":{
         "1. 본선":{"agreementNo":"","content":"호포전기 전차선로 점검(하선)","driverName":"송명진","driverPhone":"010-6683-8369","line":"2","opEnd":"04:00","opStart":"01:00","safetyName":"구교민","safetyPhone":"010-7621-8693","stationInput":0,"supervisorId":"112780","supervisorName":"서형원","totalCount":"4","trackCutoff":0,"trackType":"2","workEnd":"04:00","workFrom":"호포","workStart":"01:00","workTo":"수정-화명","workType":"2","workerName":"임지현","workerPhone":"010-4848-7286"},
@@ -195,62 +285,6 @@
       },
       "vehiclePresets":{
         "송명진":{"approveNo":"","approver":"","content":"전차선로 일상점검 (하선)","dept":"","distance":"","driver":"송명진","endTime":"04:00","point1":"호포","point2":"수정-화명","remarks":"","runTime":"180","startTime":"01:00","trackType":"하행선"}
-      }
-    },
-    "123456":{
-      "dailyLogDefaults":{
-        "autoInputTime":"",
-        "driverCheck":0,
-        "generalWork":[],
-        "safety":[{"content":"주간오전","end":"11:00","start":"09:00"},{"content":"주간오후","end":"","start":""},{"content":"야간저녁","end":"","start":""},{"content":"야간새벽","end":"","start":""}],
-        "safetyEdu":{"Fri":"","Mon":"","Sat":"","Sun":"","Thu":"","Tue":"","Wed":""}
-      },
-      "hotkeys":[
-        {"action":"AutoLogin","desc":"자동 로그인","enabled":1,"key":"#z"},
-        {"action":"AutoLoginOpenLog","desc":"자동 로그인 + 업무일지 실행","enabled":1,"key":"#!z"},
-        {"action":"ConvertExcel","desc":"일반업무 -> 엑셀 변환","enabled":1,"key":"#!a"},
-        {"action":"CopyExcel","desc":"엑셀 데이터 복사","enabled":1,"key":"#!c"},
-        {"action":"PasteExcel","desc":"일반업무에 붙여넣기","enabled":1,"key":"#!v"},
-        {"action":"ForceExit","desc":"강제 종료","enabled":1,"key":"^Esc"}
-      ],
-      "presets":{},
-      "profile":{
-        "department":"호포전기분소",
-        "erpFormat":"summary",
-        "id":"123456",
-        "name":"A조테스트",
-        "pw2":"ENC_IfBQ4G3/9fXFSjyUxCac1Q==",
-        "sapPW":"ENC_EVOkztaKnk9GOBnCtMtuGQ==",
-        "team":"A조",
-        "webPW":"ENC_IfBQ4G3/9fXFSjyUxCac1Q=="
-      }
-    },
-    "167890":{
-      "dailyLogDefaults":{
-        "autoInputTime":"",
-        "driverCheck":0,
-        "generalWork":[],
-        "safety":[{"content":"","end":"","start":""},{"content":"","end":"","start":""},{"content":"","end":"","start":""},{"content":"","end":"","start":""}],
-        "safetyEdu":{"Fri":"","Mon":"","Sat":"","Sun":"","Thu":"","Tue":"","Wed":""}
-      },
-      "hotkeys":[
-        {"action":"AutoLogin","desc":"자동 로그인","enabled":1,"key":"#z"},
-        {"action":"AutoLoginOpenLog","desc":"자동 로그인 + 업무일지 실행","enabled":1,"key":"#!z"},
-        {"action":"ConvertExcel","desc":"일반업무 -> 엑셀 변환","enabled":1,"key":"#!a"},
-        {"action":"CopyExcel","desc":"엑셀 데이터 복사","enabled":1,"key":"#!c"},
-        {"action":"PasteExcel","desc":"일반업무에 붙여넣기","enabled":1,"key":"#!v"},
-        {"action":"ForceExit","desc":"강제 종료","enabled":1,"key":"^Esc"}
-      ],
-      "presets":{},
-      "profile":{
-        "department":"호포전기분소",
-        "erpFormat":"summary",
-        "id":"167890",
-        "name":"B조테스트",
-        "pw2":"ENC_IfBQ4G3/9fXFSjyUxCac1Q==",
-        "sapPW":"ENC_EVOkztaKnk9GOBnCtMtuGQ==",
-        "team":"B조",
-        "webPW":"ENC_EVOkztaKnk9GOBnCtMtuGQ=="
       }
     }
   }

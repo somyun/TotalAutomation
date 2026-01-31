@@ -339,7 +339,7 @@ class WebAutoLogin {
             cUIA.WaitElement({ LocalizedType: "링크", Name: "생성" }, 5000).Invoke()
             ; 생성된 업무일지 cUIA할당, 로딩까지 시간이 걸릴 수 있으므로 5초동안 시도
             loop 20 {
-                if cUIA := this._FindBrowserByElement()
+                if cUIA := this._FindBrowserByElement(create := true)
                     break
                 Sleep 250
             }
@@ -365,7 +365,7 @@ class WebAutoLogin {
     ; [내부] _FindBrowserByElement
     ; 설명: 실행 중인 브라우저를 순회하며 특정 요소가 있는 브라우저 객체를 반환
     ; ==============================================================================
-    static _FindBrowserByElement() {
+    static _FindBrowserByElement(create := false) {
         targetBrowsers := ["msedge.exe", "chrome.exe", "whale.exe"]
 
         for exe in targetBrowsers {
@@ -381,9 +381,10 @@ class WebAutoLogin {
                     continue
 
                 try {
-                     cUIA := UIA_Browser("ahk_id " hwnd)
+                    cUIA := UIA_Browser("ahk_id " hwnd)
+                    nowDate := FormatTime(DateAdd(A_Now, create ? 0 : -9, "Hours"), "yyyy-MM-dd")
                     ; UIA_Browser 인스턴스 생성만으로도 시간이 소요되므로 위 조건으로 최대한 필터링함
-                    if cUIA.FindElement({ AutomationId: "I_GIJUND" , Value: FormatTime(DateAdd(A_Now, -9, "Hours"), "yyyy-MM-dd")})
+                    if cUIA.FindElement({ AutomationId: "I_GIJUND", Value: nowDate })
                         return cUIA
                 }
             }
@@ -473,7 +474,7 @@ class WebAutoLogin {
 
             try {
                 ; 항목 클릭
-                cUIA.WaitElement({LocalizedType: "텍스트",  Name: targetName }, 7000).Click("Left")
+                cUIA.WaitElement({ LocalizedType: "텍스트", Name: targetName }, 7000).Click("Left")
                 Sleep 250
                 ; 변경/조회 클릭
                 cUIA.WaitElement({ LocalizedType: "링크", Name: "변경/조회" }, 3000).Invoke()
@@ -496,21 +497,56 @@ class WebAutoLogin {
     ; ==============================================================================
     static _GoToWorklogList(cUIA) {
 
-        ;cUIA의 현재 페이지가 ERPportal이 아니고
-        if !InStr(WinGetTitle(cUIA.BrowserId), "ERP포털시스템 - 부산교통공사") {
-            ;통합포털도 아니면
-            if !InStr(WinGetTitle(cUIA.BrowserId), ":: 부산교통공사 ::")
-                ;ERPportal열기
+        ; 1. 현재 페이지 확인 (ERP포털이나 통합포털이 아니면 이동 필요)
+        currentTitle := WinGetTitle(cUIA.BrowserId)
+        isERP := InStr(currentTitle, "ERP포털시스템 - 부산교통공사")
+        isIntegrated := InStr(currentTitle, ":: 부산교통공사 ::")
+
+        if (!isERP) {
+            if (isIntegrated) {
+                ; 통합포털이면 ERP 버튼 클릭 시도
+                try {
+                    cUIA.WaitElement({ Type: "Link", Name: "ERP" }, 3000).Invoke()
+                } catch {
+                    ; 버튼 없으면 그냥 URL 이동
+                    cUIA.navigate(this.ERP_PortalURL, , 10000)
+                }
+            } else {
+                ; 그 외 페이지면 URL 직접 이동
                 cUIA.navigate(this.ERP_PortalURL, , 10000)
-            ;통합포털이면
-            else
-                ;ERP버튼으로 클릭
-                cUIA.WaitElement({Type:"Link", Name:"ERP"}, 3000).Invoke()
+            }
+
+            ; 2. [핵심] 이동 후 상태 검증 (Smart Wait)
+            ; 성공 신호(ERP 메뉴) 또는 실패 신호(로그인창 - userId) 중 먼저 뜨는 것을 10초간 대기
+            try {
+                foundEl := cUIA.WaitElement([{ AutomationId: "userId" }, { Name: "업무일지 업무일지" }], 10000)
+
+                ; 3. 로그인 화면으로 튕겼는지 확인
+                if (foundEl.AutomationId == "userId") {
+                    ; 세션 만료됨! 재로그인 시도
+                    user := ConfigManager.CurrentUser
+                    if this.Login(user["id"], user["webPW"], user["pw2"], cUIA) {
+                        ; 재로그인 성공 -> 다시 이동
+                        cUIA.navigate(this.ERP_PortalURL, , 10000)
+                        ; 이번엔 무조건 ERP 메뉴 대기 (또 실패하면 에러처리)
+                        cUIA.WaitElement({ Name: "업무일지 업무일지" }, 10000)
+                    } else {
+                        throw Error("세션 만료 후 재로그인 실패")
+                    }
+                }
+            } catch as e {
+                MsgBox("페이지 이동 중 문제 발생: " e.Message)
+                return false
+            }
         }
 
         ; 업무일지 아이콘/버튼이 나오면 클릭 => 업무일지 리스트 페이지로 이동
-        cUIA.WaitElement({ Name: "업무일지 업무일지" }, 10000).Invoke()
-        ; 로드 대기 (일지 리스트 테이블 뜰때까지?)
+        try {
+            cUIA.WaitElement({ Name: "업무일지 업무일지" }, 10000).Invoke()
+        } catch {
+            ; 이미 리스트 등 다른 화면일 수 있으므로 패스하거나 재시도 등 고민
+            ; 여기서는 일단 진행
+        }
 
         return true
     }
@@ -589,7 +625,7 @@ class WebAutoLogin {
                     if cUIA.FindElement({ AutomationId: "userId" })
                         return false
 
-                Sleep 100   ;30 * 100 = 7초간 확인
+                Sleep 100   ;30 * 100 = 3초간 확인
             }
 
             ; 4. 둘 다 없으면? 로딩중이거나 엉뚱한 페이지.
@@ -634,7 +670,6 @@ class WebAutoLogin {
                 MsgBox("2차인증 실패`n" e.Message, "오류")
                 return false
             }
-
 
             ; 로그인 완료 대기 (로그아웃 버튼 뜰 때까지)
             try {

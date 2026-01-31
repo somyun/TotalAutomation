@@ -1,0 +1,363 @@
+﻿{
+  "appSettings": {
+    "colleagues": [
+      {
+        "driverRole": "-",
+        "id": "111234",
+        "isManager": 1,
+        "name": "이윤수",
+        "phone": "",
+        "team": "일근"
+      },
+      {
+        "driverRole": "부",
+        "id": "112780",
+        "isManager": 0,
+        "name": "서형원",
+        "phone": "010-8548-2214",
+        "team": "D조"
+      },
+      {
+        "driverRole": "정",
+        "id": "115073",
+        "isManager": 0,
+        "name": "송명진",
+        "phone": "010-6683-8369",
+        "team": "D조"
+      },
+      {
+        "driverRole": "-",
+        "id": "116355",
+        "isManager": 0,
+        "name": "구교민",
+        "phone": "010-7621-8693",
+        "team": "D조"
+      },
+      {
+        "driverRole": "-",
+        "id": "116418",
+        "isManager": 0,
+        "name": "정현태",
+        "phone": "",
+        "team": "일근"
+      },
+      {
+        "driverRole": "-",
+        "id": "116713",
+        "isManager": 0,
+        "name": "임지현",
+        "phone": "010-4848-7286",
+        "team": "D조"
+      },
+      {
+        "driverRole": "-",
+        "id": "117890",
+        "isManager": 0,
+        "name": "막내당",
+        "phone": "",
+        "team": "D조"
+      },
+      {
+        "driverRole": "-",
+        "id": "",
+        "isManager": 0,
+        "name": "",
+        "phone": "",
+        "team": "A조"
+      },
+      {
+        "driverRole": "-",
+        "id": "",
+        "isManager": 0,
+        "name": "",
+        "phone": "",
+        "team": "A조"
+      }
+    ],
+    "lastUser": "115073",
+    "locations": [
+      {
+        "name": "호포154",
+        "order": "12398376",
+        "type": "변전소"
+      },
+      {
+        "name": "호포24",
+        "order": "12398384",
+        "type": "변전소"
+      },
+      {
+        "name": "율리24",
+        "order": "12398383",
+        "type": "변전소"
+      },
+      {
+        "name": "금곡",
+        "order": "12398371",
+        "type": "전기실(그룹1)"
+      },
+      {
+        "name": "동원",
+        "order": "12398347",
+        "type": "전기실(그룹2)"
+      },
+      {
+        "name": "율리",
+        "order": "12398370",
+        "type": "전기실(그룹1)"
+      },
+      {
+        "name": "화명",
+        "order": "12398264",
+        "type": "전기실(그룹2)"
+      },
+      {
+        "name": "교육원",
+        "order": "12398188",
+        "type": "전기실(그룹3)"
+      },
+      {
+        "name": "주공장",
+        "order": "12398373",
+        "type": "전기실(그룹3)"
+      },
+      {
+        "name": "검사고",
+        "order": "12398372",
+        "type": "전기실(그룹2)"
+      },
+      {
+        "name": "청사",
+        "order": "12398348",
+        "type": "전기실(그룹1)"
+      },
+      {
+        "name": "열차순회",
+        "order": "12398385",
+        "type": "기타업무"
+      },
+      {
+        "name": "모터카점검",
+        "order": "12398263",
+        "type": "기타업무"
+      },
+      {
+        "name": "전차선로(상선)",
+        "order": "12398387",
+        "type": "기타업무"
+      },
+      {
+        "name": "전차선로(하선)",
+        "order": "12398191",
+        "type": "기타업무"
+      },
+      {
+        "name": "취약개소(S/S)",
+        "order": "12395340",
+        "type": "기타업무"
+      },
+      {
+        "name": "취약개소(회차)",
+        "order": "12398388",
+        "type": "기타업무"
+      },
+      {
+        "name": "기지구내",
+        "order": "12398386",
+        "type": "기타업무"
+      }
+    ]
+  },
+  "users": {
+    "115073": {
+      "hotkeys": [
+        {
+          "action": "AutoLogin",
+          "desc": "자동 로그인",
+          "enabled": 1,
+          "key": "#z"
+        },
+        {
+          "action": "AutoLoginOpenLog",
+          "desc": "자동 로그인 + 업무일지 실행",
+          "enabled": 1,
+          "key": "#!z"
+        },
+        {
+          "action": "ConvertExcel",
+          "desc": "일반업무 -> 엑셀 변환",
+          "enabled": 1,
+          "key": "#!a"
+        },
+        {
+          "action": "CopyExcel",
+          "desc": "엑셀 데이터 복사",
+          "enabled": 1,
+          "key": "#!c"
+        },
+        {
+          "action": "PasteExcel",
+          "desc": "일반업무에 붙여넣기",
+          "enabled": 1,
+          "key": "#!v"
+        },
+        {
+          "action": "ForceExit",
+          "desc": "강제 종료",
+          "enabled": 1,
+          "key": "^Esc"
+        }
+      ],
+      "profile": {
+        "department": "호포전기분소",
+        "erpFormat": "summary",
+        "id": "115073",
+        "name": "송명진",
+        "pw2": "ENC_4tv3V0s7Obh/XkC1n4LuWw==",
+        "sapPW": "ENC_4W+fdxp8pV2Z8xQ7c1bL3w==",
+        "team": "D조",
+        "webPW": "ENC_4W+fdxp8pV2Z8xQ7c1bL3w=="
+      },
+      "trackPresets": {
+        "1. 본선": {
+          "agreementNo": "",
+          "content": "호포전기 전차선로 점검(하선)",
+          "driverName": "송명진",
+          "driverPhone": "010-6683-8369",
+          "line": "2",
+          "opEnd": "04:00",
+          "opStart": "01:00",
+          "safetyName": "구교민",
+          "safetyPhone": "010-7621-8693",
+          "stationInput": 0,
+          "supervisorId": "112780",
+          "supervisorName": "서형원",
+          "totalCount": "4",
+          "trackCutoff": 0,
+          "trackType": "2",
+          "workEnd": "04:00",
+          "workFrom": "호포",
+          "workStart": "01:00",
+          "workTo": "수정-화명",
+          "workType": "2",
+          "workerName": "임지현",
+          "workerPhone": "010-4848-7286"
+        },
+        "2. 기지구내": {
+          "agreementNo": "",
+          "content": "호포전기 기지구내 전차선로 점검",
+          "driverName": "송명진",
+          "driverPhone": "010-6683-8369",
+          "line": "7",
+          "opEnd": "",
+          "opStart": "",
+          "safetyName": "구교민",
+          "safetyPhone": "010-7621-8693",
+          "stationInput": 0,
+          "supervisorId": "112780",
+          "supervisorName": "서형원",
+          "totalCount": "4",
+          "trackCutoff": 0,
+          "trackType": "19",
+          "workEnd": "04:00",
+          "workFrom": "호포기지 기지선로 공통",
+          "workStart": "01:00",
+          "workTo": "호포기지 기지선로 공통",
+          "workType": "4",
+          "workerName": "임지현",
+          "workerPhone": "010-4848-7286"
+        },
+        "3. 도보순회": {
+          "agreementNo": "",
+          "content": "호포전기 기지구내 도보순회 점검",
+          "driverName": "",
+          "driverPhone": "",
+          "line": "7",
+          "opEnd": "",
+          "opStart": "",
+          "safetyName": "",
+          "safetyPhone": "",
+          "stationInput": 0,
+          "supervisorId": "112780",
+          "supervisorName": "서형원",
+          "totalCount": "3",
+          "trackCutoff": 0,
+          "trackType": "19",
+          "workEnd": "17:00",
+          "workFrom": "호포기지 기지선로 공통",
+          "workStart": "10:00",
+          "workTo": "호포기지 기지선로 공통",
+          "workType": "5",
+          "workerName": "송명진",
+          "workerPhone": "010-6683-8369"
+        }
+      },
+      "vehiclePresets": {
+        "송명진": {
+          "approveNo": "",
+          "approver": "",
+          "content": "전차선로 일상점검 (하선)",
+          "dept": "",
+          "distance": "",
+          "driver": "송명진",
+          "endTime": "04:00",
+          "point1": "호포",
+          "point2": "수정-화명",
+          "remarks": "",
+          "runTime": "180",
+          "startTime": "01:00",
+          "trackType": "하행선"
+        }
+      }
+    },
+    "115074": {
+      "hotkeys": [
+        {
+          "action": "AutoLogin",
+          "desc": "자동 로그인",
+          "enabled": 1,
+          "key": "#z"
+        },
+        {
+          "action": "AutoLoginOpenLog",
+          "desc": "자동 로그인 + 업무일지 실행",
+          "enabled": 1,
+          "key": "#!z"
+        },
+        {
+          "action": "ConvertExcel",
+          "desc": "일반업무 -> 엑셀 변환",
+          "enabled": 1,
+          "key": "#!a"
+        },
+        {
+          "action": "CopyExcel",
+          "desc": "엑셀 데이터 복사",
+          "enabled": 1,
+          "key": "#!c"
+        },
+        {
+          "action": "PasteExcel",
+          "desc": "일반업무에 붙여넣기",
+          "enabled": 1,
+          "key": "#!v"
+        },
+        {
+          "action": "ForceExit",
+          "desc": "강제 종료",
+          "enabled": 1,
+          "key": "^Esc"
+        }
+      ],
+      "profile": {
+        "department": "호포전기분소",
+        "id": "115074",
+        "name": "노트북",
+        "pw2": "",
+        "sapPW": "",
+        "team": "A조",
+        "webPW": ""
+      }
+    }
+  }
+}

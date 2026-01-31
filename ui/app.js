@@ -23,6 +23,16 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Event Listener for ERP Refresh Button
+    const btnRefresh = document.getElementById('btn-refresh-erp');
+    if (btnRefresh) {
+        btnRefresh.addEventListener('click', () => {
+            // Clear previous status text temporarily or show loading state if desired
+            document.getElementById('erp-last-update').innerText = "조회 중...";
+            sendMessageToAHK({ command: 'refreshERPOrder' });
+        });
+    }
+
     // Request Initial Data
     if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage({ command: 'ready' });
@@ -113,6 +123,16 @@ if (window.chrome && window.chrome.webview) {
 }
 
 function sendMessageToAHK(payload) {
+    // [Refactor] Inject UI State for fast reload on 'runTask'
+    if (payload && payload.command === 'runTask') {
+        try {
+            const state = collectUiState();
+            payload.uiState = state;
+        } catch (e) {
+            console.error("Failed to collect UI state for runTask:", e);
+        }
+    }
+
     if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage(payload);
     } else {
@@ -141,10 +161,15 @@ function handleAhkMessage(msg) {
             if (document.getElementById('settings-view').style.display !== 'none') {
                 loadSettingsToUI();
             }
-            // Initialize Work Log IF logged in and not yet done (Fix for Race Condition)
-            if (selectedUserId && !isWorkLogInitialized) {
-                renderWorkLogUI();
-                isWorkLogInitialized = true;
+            // Initialize Work Log IF logged in and not yet done
+            if (selectedUserId) {
+                if (!isWorkLogInitialized) {
+                    renderWorkLogUI(); // 최초 렌더링
+                    isWorkLogInitialized = true;
+                }
+
+                // [Hot Reload] 통합 UI 갱신 (설정 변경 사항 즉시 반영)
+                refreshUI();
             }
 
             // Apply pending restore if exists (Race Condition Fix)
@@ -183,6 +208,76 @@ function handleAhkMessage(msg) {
                 showNativeMsgBox("승인정보를 불러오지 못했습니다.");
             }
             break;
+        case 'updateERPOrderList': // New Case
+            handleERPOrderListUpdate(msg.orders);
+            break;
+        case 'updateTitle':
+            // document.title = msg.title; // 윈도우 캡션용 (선택사항)
+            const tEl = document.getElementById('app-title');
+            if (tEl) tEl.innerText = msg.title; // 사용자 눈에 보이는 커스텀 타이틀바 갱신
+            break;
+        case 'headlessReady':
+            // [New] Headless 준비 완료 시 버튼 활성화
+            const btnImport = document.getElementById('btn-import-workers');
+            if (btnImport) btnImport.disabled = false;
+
+            // ERP 새로고침 버튼도 활성화
+            const btnRefresh = document.getElementById('btn-refresh-erp');
+            if (btnRefresh) {
+                btnRefresh.disabled = false;
+                btnRefresh.style.opacity = "1";
+            }
+            break;
+        case 'updateWorkerList':
+            // [New] 작업자 명단 수신 처리
+            handleWorkerListUpdate(msg.data);
+            break;
+        case 'showInitOverlay':
+            // [New] 초기화 오버레이 표시
+            showInitOverlay(msg.message);
+            break;
+        case 'hideInitOverlay':
+            // [New] 초기화 오버레이 숨김
+            hideInitOverlay();
+            break;
+    }
+}
+
+// --- Initialization Overlay ---
+function showInitOverlay(message) {
+    let overlay = document.getElementById('init-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'init-overlay';
+        overlay.style.cssText = `
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255, 255, 255, 0.95); z-index: 9999;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+        `;
+        document.body.appendChild(overlay);
+    }
+
+    // 로딩 이미지 경로 (webview 컨텍스트 기준)
+    const imgPath = 'img/loading.gif';
+
+    overlay.innerHTML = `
+        <img src="${imgPath}" alt="Loading..." style="width: 64px; height: 64px; margin-bottom: 20px;">
+        <div style="font-size: 18px; font-weight: bold; color: #333;">${message || '초기 구성 중...'}</div>
+        <div style="font-size: 14px; color: #666; margin-top: 10px;">잠시만 기다려주세요</div>
+    `;
+
+    overlay.style.display = 'flex';
+}
+
+function hideInitOverlay() {
+    const overlay = document.getElementById('init-overlay');
+    if (overlay) {
+        overlay.style.transition = 'opacity 0.5s ease';
+        overlay.style.opacity = '0';
+        setTimeout(() => {
+            overlay.style.display = 'none';
+            overlay.style.opacity = '1';
+        }, 500);
     }
 }
 
@@ -351,11 +446,15 @@ function switchMainTab(viewId) {
                 // (though we added the guard clause just in case)
             }
         }
-        renderERPCheck();
+        // 통합 UI 갱신 함수 호출 (ERP 점검 포함)
+        refreshUI();
     } else if (viewId === 'view-work-log') {
         // Only render if NOT initialized yet (Persistence Fix)
         if (!isWorkLogInitialized) {
             renderWorkLogUI();
+        } else {
+            // 이미 초기화된 경우 통합 UI 갱신 함수 호출
+            refreshUI();
         }
     }
 }
@@ -396,6 +495,7 @@ function openSettings() {
 }
 
 function closeSettings() {
+    sendMessageToAHK({ command: 'exitSettings' });
     switchView('app');
 }
 
@@ -691,7 +791,7 @@ function loadSettingsToUI() {
 
     setVal('user-name', profile.name);
     setVal('user-id', profile.id);
-    setVal('user-dept', profile.department);
+    setVal('user-dept', profile.arbpl);
     setVal('user-team', profile.team);
     setVal('user-webpw', profile.webPW);
     setVal('user-pw2', profile.pw2);
@@ -828,7 +928,11 @@ function saveSettings() {
 
         if (!user.profile) user.profile = {};
 
-        user.profile.department = getVal('user-dept');
+        const deptSel = document.getElementById('user-dept');
+        if (deptSel) {
+            user.profile.arbpl = deptSel.value; // Store ID (e.g. 5129)
+            user.profile.department = deptSel.options[deptSel.selectedIndex] ? deptSel.options[deptSel.selectedIndex].text : ""; // Store Name
+        }
         user.profile.team = getVal('user-team');
         user.profile.webPW = getVal('user-webpw');
         user.profile.pw2 = getVal('user-pw2');
@@ -981,7 +1085,7 @@ function handleDriverChange(select) {
 function addWorkerRow(data = {}) {
     const tbody = document.querySelector('#worker-table tbody');
     // Fix: Check if data has keys (loaded config) or is empty (new row button)
-    const rowData = Object.keys(data).length > 0 ? data : { name: '', id: '', team: 'A조', phone: '', isManager: 0, driverRole: '-' };
+    const rowData = Object.keys(data).length > 0 ? data : { name: '', id: '', team: '일근', phone: '', isManager: 0, driverRole: '-' };
     addWorkerRowToTable(tbody, rowData);
     // Auto scroll to bottom of the settings content area
     const contentArea = document.querySelector('.settings-content-area');
@@ -1185,6 +1289,20 @@ function renderERPCheck() {
     // 1. Get global locations
     const locations = (appConfig.appSettings && appConfig.appSettings.locations) ? appConfig.appSettings.locations : [];
 
+    // [State Preservation] 렌더링 전 현재 상태 저장 (선택된 장소, 체크표시)
+    const savedSelectedLocation = selectedERPLocation;
+    const savedCheckmarks = new Set();
+    const existingButtons = document.querySelectorAll('.erp-btn[data-order-num]');
+    existingButtons.forEach(btn => {
+        const checkMark = btn.querySelector('.order-check-mark');
+        if (checkMark) {
+            const orderNum = btn.dataset.orderNum;
+            if (orderNum) {
+                savedCheckmarks.add(orderNum);
+            }
+        }
+    });
+
     // 2. Clear containers
     const gridSub = document.getElementById('grid-substation');
     const gridEtc = document.getElementById('grid-etc');
@@ -1198,7 +1316,8 @@ function renderERPCheck() {
     if (elG2) elG2.innerHTML = '';
     if (elG3) elG3.innerHTML = '';
 
-    selectedERPLocation = null; // Reset selection
+    // 선택된 장소는 나중에 복원하므로 여기서는 null로 설정하지 않음
+    // selectedERPLocation = null; // Reset selection - 주석 처리
 
     // 3. Process Items
     locations.forEach(loc => {
@@ -1208,7 +1327,25 @@ function renderERPCheck() {
         btn.appendChild(document.createTextNode(loc.name));
 
         btn.dataset.locName = loc.name;
+        btn.dataset.orderNum = loc.order; // Store Order Number for lookup
         btn.onclick = () => selectERPLoc(btn, loc.name);
+
+        // [State Preservation] 저장된 체크표시 복원
+        if (savedCheckmarks.has(loc.order)) {
+            const checkSpan = document.createElement('span');
+            checkSpan.className = 'order-check-mark';
+            checkSpan.textContent = '\u2714\uFE0E'; // ✔ (Heavy Check Mark) + Text Presentation Selector
+            checkSpan.style.color = '#00C853'; // Vibrant Green
+            checkSpan.style.marginRight = '5px';
+            checkSpan.style.fontWeight = 'bold';
+            btn.prepend(checkSpan);
+        }
+
+        // [State Preservation] 저장된 선택 상태 복원
+        if (savedSelectedLocation === loc.name) {
+            btn.classList.add('selected');
+            selectedERPLocation = loc.name;
+        }
 
         if (loc.type === '변전소') {
             // Default Status Dot (Yellow)
@@ -1238,6 +1375,11 @@ function renderERPCheck() {
             }
         }
     });
+
+    // [State Preservation] 저장된 선택 장소가 더 이상 목록에 없는 경우 초기화
+    if (savedSelectedLocation && !locations.find(loc => loc.name === savedSelectedLocation)) {
+        selectedERPLocation = null;
+    }
 
     // Apply cached status if available
     handleERPStatusUpdate(null);
@@ -1274,7 +1416,46 @@ function handleERPStatusUpdate(statusMap) {
         }
     });
 }
+
 window.handleERPStatusUpdate = handleERPStatusUpdate;
+
+function handleERPOrderListUpdate(orders) {
+    if (!orders || !Array.isArray(orders)) return;
+
+    // 1. Update Timestamp
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const hh = String(now.getHours()).padStart(2, '0');
+    const min = String(now.getMinutes()).padStart(2, '0');
+    const timeStr = `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+
+    document.getElementById('erp-last-update').innerText = timeStr;
+
+    // 2. Mark Buttons
+    orders.forEach(orderNum => {
+        // Find buttons with this order number
+        // Attribute selector queries need quotes if value contains special chars, but orderNum is safe digits usually.
+        const btns = document.querySelectorAll(`.erp-btn[data-order-num="${orderNum}"]`);
+
+        btns.forEach(btn => {
+            // Check if already has checkmark to avoid double adding
+            // We use a specific class for the checkmark span
+            if (!btn.querySelector('.order-check-mark')) {
+                const checkSpan = document.createElement('span');
+                checkSpan.className = 'order-check-mark';
+                checkSpan.textContent = '\u2714\uFE0E'; // ✔ (Heavy Check Mark) + Text Presentation Selector
+                checkSpan.style.color = '#00C853'; // Vibrant Green
+                checkSpan.style.marginRight = '5px';
+                checkSpan.style.fontWeight = 'bold';
+
+                // Prepend to the button content
+                btn.prepend(checkSpan);
+            }
+        });
+    });
+}
 
 function selectERPLoc(btn, locName) {
     // Deselect all
@@ -1486,6 +1667,24 @@ function toggleDrinkCalibration() {
 
 function renderWorkLogWorkerList() {
     const container = document.getElementById('work-log-worker-list');
+
+    // [State Preservation] 렌더링 전 현재 상태 저장 (체크박스, 휴가사유, 운전원 선택)
+    const savedState = {};
+    const existingRows = container.querySelectorAll('.worker-row');
+    existingRows.forEach(row => {
+        const workerId = row.dataset.id;
+        if (workerId) {
+            const chk = row.querySelector('.w-chk');
+            const note = row.querySelector('.w-note');
+            const drv = row.querySelector('.w-drive');
+            savedState[workerId] = {
+                checked: chk ? chk.checked : false,
+                note: note ? note.value : '',
+                driver: drv ? drv.value : ''
+            };
+        }
+    });
+
     container.innerHTML = '';
     // const countSpan = document.getElementById('worker-count'); // Removed
 
@@ -1517,9 +1716,13 @@ function renderWorkLogWorkerList() {
         row.dataset.id = worker.id;
         row.dataset.team = worker.team; // [중요] 근무조 데이터셋 추가
         row.dataset.name = worker.name;
+        row.dataset.isManager = worker.isManager;
 
-        // Default Checked logic: Select All by default
-        const isChecked = true;
+        // [State Preservation] 저장된 상태가 있으면 사용, 없으면 기본값 (모두 체크)
+        const saved = savedState[worker.id];
+        const isChecked = saved ? saved.checked : true;
+        const savedNote = saved ? saved.note : '';
+        const savedDriver = saved ? saved.driver : '';
 
         // Dynamic Driver Column
         const isDay = document.querySelector('input[name="work-type"][value="day"]').checked;
@@ -1534,13 +1737,19 @@ function renderWorkLogWorkerList() {
             <div class="${driveClass}">
                 <select class="w-drive" disabled id="drv-worker-${worker.id}">
                     <option value="">-</option>
-                    <option value="정" ${worker.driverRole === '정' ? 'selected' : ''}>정</option>
-                    <option value="부" ${worker.driverRole === '부' ? 'selected' : ''}>부</option>
-                    <option value="검사자" ${worker.driverRole === '검사자' ? 'selected' : ''}>검사자</option>
+                    <option value="정" ${(savedDriver || worker.driverRole) === '정' ? 'selected' : ''}>정</option>
+                    <option value="부" ${(savedDriver || worker.driverRole) === '부' ? 'selected' : ''}>부</option>
+                    <option value="검사자" ${(savedDriver || worker.driverRole) === '검사자' ? 'selected' : ''}>검사자</option>
                 </select>
             </div>
         `;
         container.appendChild(row);
+
+        // [State Preservation] 저장된 휴가사유 복원 (innerHTML 후에 설정하여 안전하게 처리)
+        const noteInput = row.querySelector('.w-note');
+        if (noteInput && savedNote) {
+            noteInput.value = savedNote;
+        }
 
         // Add Listeners
         const chk = row.querySelector('.w-chk');
@@ -1563,8 +1772,6 @@ function renderWorkLogWorkerList() {
             if (!chk.checked) drv.value = '';
         });
     });
-
-    // countSpan.innerText = `총 ${filteredWorkers.length}명`; // Removed
 
     // Initial Driver Enable Check
     const isDay = document.querySelector('input[name="work-type"][value="day"]').checked;
@@ -1627,7 +1834,9 @@ function startWorkLog() {
             id: row.dataset.id,
             attend: chk.checked,
             reason: note.value,
-            driverRole: drv.value
+            driverRole: drv.value,
+            team: row.dataset.team,
+            boss: row.dataset.isManager
         });
     });
 
@@ -1735,10 +1944,8 @@ function updateShiftUI(shiftData) {
     if (radio && !radio.checked) {
         radio.checked = true;
 
-        // Trigger UI update (refresh worker list, etc.)
-        if (typeof handleWorkTypeChange === 'function') {
-            handleWorkTypeChange();
-        }
+        // 통합 UI 갱신 함수 호출 (작업자 명단, 프리셋, 옵션 등 모두 갱신)
+        refreshUI();
     }
 }
 
@@ -2046,17 +2253,18 @@ function renderPresetOptions(selectId, presets) {
     sel.appendChild(newOpt);
 
     // Determines Selection
-    if (currentVal && (presets[currentVal] || currentVal === '__NEW__')) {
-        sel.value = currentVal;
-    } else if (keys.length > 0) {
-        // Init: Select First Preset
-        sel.value = keys[0];
-        // Trigger Change Event to Load Data
-        sel.dispatchEvent(new Event('change'));
+    if (keys.length > 0) {
+        // 프리셋이 있으면, 현재 선택된 값이 유효한 프리셋인 경우만 유지하고
+        // 그 외(New Preset 포함)에는 첫 번째 프리셋을 강제로 선택합니다.
+        if (currentVal && presets[currentVal]) {
+            sel.value = currentVal;
+        } else {
+            sel.value = keys[0];
+            sel.dispatchEvent(new Event('change'));
+        }
     } else {
-        // Init: No Presets -> Select New
+        // 프리셋이 없으면 새 프리셋 추가 선택
         sel.value = "__NEW__";
-        // Trigger Change Event to Clear/Init Form
         sel.dispatchEvent(new Event('change'));
     }
 }
@@ -2402,6 +2610,7 @@ function deleteVehiclePreset() {
 function runVehicleLogTask() {
     const data = {
         driver: getVal('vl-driver'),
+        department: appConfig.users[selectedUserId] ? appConfig.users[selectedUserId].profile.department : '',
         point1: getVal('vl-point-1'),
         point2: getVal('vl-point-2'),
         trackType: getVal('vl-track-type'),
@@ -2541,3 +2750,109 @@ window.loadPresetDetail = loadPresetDetail;
 window.addGeneralWorkRow = addGeneralWorkRow;
 window.saveAutoInputSettings = saveAutoInputSettings;
 window.formatTime = formatTime;
+
+// [Refactor] 통합 UI 갱신 함수 (Hot Reload 지원)
+// 설정 변경 후 호출되어 각 화면의 요소를 강제로 최신화합니다.
+// 모든 UI 갱신 로직을 이 함수 하나로 통합하여 스파게티 코드 문제를 해결합니다.
+function refreshUI() {
+    if (!selectedUserId) return;
+
+    // 1. 업무일지: 작업자 명단 갱신 (팀 변경, 이름 변경 등 반영)
+    // renderWorkLogWorkerList는 appConfig.users[selectedUserId]와 appSettings.colleagues를 새로 읽어옵니다.
+    renderWorkLogWorkerList();
+
+    // 2. 업무일지: 프리셋 및 옵션 재적용
+    // handleWorkTypeChange(true)는 현재 선택된 주/야간 모드에 맞춰 체크박스, 안전관리 내용을 다시 세팅합니다.
+    handleWorkTypeChange(true);
+
+    // 3. ERP 점검: 장소 목록 및 오더번호 갱신
+    // 탭이 그 때 활성화되어 있지 않더라도 DOM을 갱신해두면 나중에 탭 진입 시 최신 상태가 보입니다.
+    renderERPCheck();
+
+    // 4. 프리셋 목록 갱신 (선로출입/차량일지)
+    // 설정에서 프리셋이 변경되었을 때 반영하기 위해 갱신합니다.
+    initPresets();
+}
+
+// [New] Headless 작업자 명단 불러오기 요청
+function importWorkersFromHeadless() {
+    const uid = selectedUserId;
+    if (!uid) return;
+
+    // 현재 유저의 '분소' 코드 (arbpl) 가져오기
+    // appConfig.users[uid].profile.arbpl 에 저장되어 있다고 가정 (Settings에서 저장됨)
+    // 없을 경우 기본값 혹은 오류 처리
+    const user = appConfig.users[uid];
+    const arbpl = (user.profile && user.profile.arbpl) ? user.profile.arbpl : "";
+
+    if (!arbpl) {
+        showNativeMsgBox("분소 정보가 설정되지 않았습니다. [내 정보] 탭에서 분소를 선택해주세요.");
+        return;
+    }
+
+    const btn = document.getElementById('btn-import-workers');
+    if (btn) btn.disabled = true; // 중복 클릭 방지
+
+    // 요청 전송
+    sendMessageToAHK({ command: 'importWorkers', arbpl: arbpl });
+
+    // 타임아웃 처리 (혹은 응답 대기 로직)
+    setTimeout(() => {
+        if (btn && btn.disabled) {
+            btn.disabled = false; // 10초 후 복구 (실패 시 등)
+        }
+    }, 10000);
+}
+
+// 수신된 작업자 명단 처리
+function handleWorkerListUpdate(newWorkers) {
+    if (!newWorkers || !Array.isArray(newWorkers)) return;
+
+    // 기존 테이블 데이터 스캔 (중복 방지)
+    const existingIds = new Set();
+    document.querySelectorAll('#worker-table tbody tr').forEach(row => {
+        const idInput = row.querySelector('input[placeholder="사번"]');
+        if (idInput && idInput.value) {
+            existingIds.add(idInput.value);
+        }
+    });
+
+    let addedCount = 0;
+    const tbody = document.querySelector('#worker-table tbody');
+
+    newWorkers.forEach(w => {
+        // AHK Map keys: "사번", "이름", "휴가종류", "근무조"
+        const id = w["사번"];
+        const name = w["이름"];
+        const team = w["근무조"];
+        // const vacation = w["휴가종류"]; // 비고란엔 넣지 않음 (요청사항 없음, 필요 시 추가)
+
+        if (id && !existingIds.has(id)) {
+            // 새 작업자 추가
+            addWorkerRowToTable(tbody, {
+                name: name,
+                id: id,
+                team: team,
+                phone: '',
+                isManager: 0,
+                driverRole: '-'
+            });
+            addedCount++;
+        }
+    });
+
+    if (addedCount > 0) {
+        autoSaveSettings(); // 데이터 변경 저장
+
+        // Auto scroll
+        const contentArea = document.querySelector('.settings-content-area');
+        if (contentArea) contentArea.scrollTop = contentArea.scrollHeight;
+    } else {
+        showNativeMsgBox("추가할 새로운 분소원이 없습니다.");
+    }
+
+    const btn = document.getElementById('btn-import-workers');
+    if (btn) btn.disabled = false;
+}
+
+window.importWorkersFromHeadless = importWorkersFromHeadless;

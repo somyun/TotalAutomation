@@ -1,0 +1,2438 @@
+/* Global Styles */
+@font-face {
+    font-family: 'Pretendard';
+    src: local('Pretendard'), local('Malgun Gothic');
+    /* Fallback */
+}
+
+:root {
+    --primary-color: #4CAF50;
+    /* AdGuard Green */
+    --hover-color: #e8f5e9;
+    --bg-color: #ffffff;
+    --sidebar-bg: #f7f7f7;
+    --text-color: #333333;
+    --border-color: #e0e0e0;
+    --title-bar-height: 32px;
+}
+
+@media (prefers-color-scheme: dark) {
+    /* Future dark mode support */
+}
+
+* {
+    box-sizing: border-box;
+    cursor: default;
+    /* Default cursor for app-like feel */
+    user-select: none;
+    /* Disable text selection */
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Pretendard', 'Segoe UI', sans-serif;
+    color: var(--text-color);
+    background-color: var(--bg-color);
+    overflow: hidden;
+    /* No body scroll */
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Add User Form (Separate View) */
+#add-user-view {
+    display: none;
+    /* Hidden by default */
+    background: white;
+    padding: 2rem;
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    width: 450px;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+#add-user-view.active {
+    display: flex;
+}
+
+.form-row {
+    display: flex;
+    gap: 10px;
+}
+
+.form-row .form-group {
+    flex: 1;
+}
+
+input,
+textarea,
+select {
+    cursor: text;
+    user-select: text;
+    font-family: inherit;
+}
+
+/* Title Bar */
+#title-bar {
+    height: var(--title-bar-height);
+    background: var(--bg-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border-color);
+    /* Parent is NOT draggable to avoid covering controls */
+}
+
+#title-drag-area {
+    flex-grow: 1;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    padding-left: 15px;
+    font-size: 14px;
+    font-weight: 500;
+    /* -webkit-app-region: drag; */
+    /* Disabled: Using Manual JS Drag */
+    cursor: default;
+}
+
+#window-controls {
+    display: flex;
+    -webkit-app-region: no-drag;
+    z-index: 9999;
+    /* Ensure strictly on top */
+}
+
+/* =========================================
+   Settings View (Full Page Transition)
+   ========================================= */
+#settings-view {
+    position: absolute;
+    top: var(--title-bar-height);
+    /* Below title bar */
+    left: 0;
+    width: 100%;
+    height: calc(100% - var(--title-bar-height));
+    background-color: var(--bg-color);
+    z-index: 100;
+    /* Higher than #app-container */
+    display: none;
+    flex-direction: column;
+}
+
+/* ... existing settings components ... */
+.settings-header {
+    height: 50px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    background: #f8f9fa;
+    flex-shrink: 0;
+    /* Prevent shrinking */
+}
+
+.back-btn {
+    background: none;
+    border: none;
+    cursor: default;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border-radius: 4px;
+    color: var(--text-primary);
+}
+
+.back-btn:hover {
+    background-color: #ddd;
+}
+
+.back-btn svg {
+    margin-right: 5px;
+}
+
+.settings-title {
+    font-size: 18px;
+    font-weight: bold;
+    margin-left: 10px;
+}
+
+.settings-body {
+    flex-grow: 1;
+    display: flex;
+    overflow: hidden;
+}
+
+.settings-sidebar {
+    width: 200px;
+    border-right: 1px solid var(--border-color);
+    background: #fafafa;
+    padding: 10px 0;
+    flex-shrink: 0;
+}
+
+.settings-content-area {
+    flex-grow: 1;
+    padding: 20px;
+    overflow-y: scroll;
+    /* Always show scrollbar to prevent layout shift */
+}
+
+/* Settings Tabs */
+.settings-sidebar .tab-item {
+    padding: 12px 20px;
+    cursor: default;
+    border-left: 3px solid transparent;
+    transition: background 0.2s;
+}
+
+.settings-sidebar .tab-item:hover {
+    background-color: #eee;
+}
+
+.settings-sidebar .tab-item.active {
+    background-color: #e6f7ff;
+    border-left-color: var(--primary-color);
+    color: var(--primary-color);
+    font-weight: bold;
+}
+
+.settings-tab-pane {
+    display: none;
+}
+
+.settings-tab-pane.active {
+    display: block;
+    animation: fadeIn 0.3s;
+}
+
+.settings-tab-pane h2 {
+    margin-top: 5px;
+    margin-bottom: 20px;
+    font-size: 18px;
+}
+
+/* Table Utils for Settings */
+.toolbar {
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.tab-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+/* Table Improvements */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+th,
+td {
+    padding: 2px 4px;
+    /* Very compact padding */
+    border: 1px solid #ccc;
+    /* Visible borders */
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    height: 32px;
+    /* Fixed height for rows */
+}
+
+th {
+    background-color: #f0f0f0;
+    font-weight: 600;
+    text-align: center;
+    font-size: 13px;
+    /* Enhanced font size */
+    padding: 8px 4px;
+}
+
+/* Higher specificity to override generic input styles */
+#settings-view td input,
+#settings-view td select {
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+    padding: 4px;
+    background: transparent;
+    font-family: inherit;
+    font-size: 13px;
+    box-shadow: none;
+}
+
+#settings-view td input:focus,
+#settings-view td select:focus {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+    background: #fff;
+    border-radius: 0;
+    border: none;
+}
+
+td input[type="checkbox"] {
+    cursor: pointer;
+    width: 14px;
+    /* Reduced to ~75% */
+    height: 14px;
+    margin: 0 auto;
+    display: block;
+    accent-color: var(--primary-color);
+}
+
+/* Remove focus outline for checkbox */
+td input[type="checkbox"]:focus {
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+/* Keycap Style */
+kbd {
+    display: inline-block;
+    padding: 2px 6px;
+    font-family: monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #333;
+    background-color: #f7f7f7;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2), 0 0 0 1px white inset;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2), 0 0 0 1px white inset;
+    margin: 0 1px;
+    /* Tighter spacing */
+}
+
+/* Back Icon Button (Login) */
+.icon-back-btn {
+    position: absolute;
+    top: 15px;
+    left: 15px;
+    background: none;
+    border: none;
+    padding: 8px;
+    border-radius: 50%;
+    cursor: pointer;
+    color: #666;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.icon-back-btn:hover {
+    background-color: #f0f0f0;
+    color: #333;
+}
+
+.center {
+    text-align: center;
+}
+
+/* ... existing Validation Styles ... */
+
+.add-row-btn {
+    width: 100%;
+    padding: 10px;
+    margin-top: 10px;
+    background-color: #f0f0f0;
+    border: 1px dashed #ccc;
+    color: #666;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+    border-radius: 4px;
+}
+
+.add-row-btn:hover {
+    background-color: #e8f5e9;
+    color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+/* Validation Styles */
+.password-box {
+    position: relative;
+}
+
+/* Remove old Error Text */
+.error-text {
+    display: none !important;
+}
+
+/* Validation Success Indicator */
+.validation-success::after {
+    content: "✔";
+    color: #52c41a;
+    font-weight: bold;
+    margin-left: 8px;
+}
+
+input.inputs-match {
+    border-color: #52c41a !important;
+    background-color: #f6ffed !important;
+}
+
+input.inputs-error {
+    border-color: #ff4d4f !important;
+    background-color: #fff1f0 !important;
+}
+
+.control-btn {
+    width: 45px;
+    height: var(--title-bar-height);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: default;
+    transition: background 0.2s;
+    -webkit-app-region: no-drag;
+}
+
+/* Login Container */
+#login-container {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: var(--bg-secondary);
+    /* Ensure it takes full height below title bar */
+    height: calc(100vh - 30px);
+}
+
+.login-card {
+    background: white;
+    padding: 2rem;
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    width: 400px;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.login-card h2 {
+    text-align: center;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+#user-list-container {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    height: 200px;
+    /* Fixed height */
+    overflow-y: auto;
+}
+
+.user-item {
+    padding: 10px 15px;
+    cursor: default;
+    border-bottom: 1px solid var(--border-color);
+    transition: background 0.2s;
+}
+
+.user-item:last-child {
+    border-bottom: none;
+}
+
+.user-item:hover {
+    background-color: var(--hover-color);
+}
+
+.user-item.selected {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.control-btn:hover {
+    background-color: #eee;
+}
+
+.control-btn.close-btn:hover {
+    background-color: #e81123;
+    color: white;
+}
+
+.control-btn svg {
+    width: 10px;
+    height: 10px;
+}
+
+/* App Container */
+#app-container {
+    display: flex;
+    flex: 1;
+    height: calc(100vh - var(--title-bar-height));
+}
+
+/* Shift Status Panel */
+.shift-panel {
+    padding: 10px 15px;
+    text-align: center;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    margin: 0 10px 10px 10px;
+}
+
+.shift-row {
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    /* Bottom align for items */
+    gap: 5px;
+    margin-bottom: 2px;
+}
+
+.shift-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    /* Bottom align including date */
+    min-width: 25px;
+}
+
+.shift-date {
+    font-size: 10px;
+    color: #888;
+    margin-bottom: 2px;
+    height: 12px;
+    /* Fixed height to reserve space */
+}
+
+.shift-item {
+    font-size: 14px;
+    font-weight: 500;
+    color: #999;
+}
+
+.shift-item.current {
+    font-size: 18px;
+    font-weight: 700;
+    color: #333;
+}
+
+.shift-arrow {
+    font-size: 12px;
+    color: #bbb;
+    margin-bottom: 3px;
+    /* Align with text */
+}
+
+.shift-label {
+    font-size: 11px;
+    color: #666;
+    margin-top: 2px;
+}
+
+/* Sidebar */
+#sidebar {
+    width: 200px;
+    /* Matched to settings sidebar */
+    background-color: var(--sidebar-bg);
+    border-right: 1px solid var(--border-color);
+    padding: 10px 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+.nav-top,
+.nav-bottom {
+    display: flex;
+    flex-direction: column;
+}
+
+.menu-item.settings-btn {
+    border-top: 1px solid var(--border-color);
+    margin-top: 10px;
+    padding-top: 15px;
+}
+
+.menu-label {
+    padding: 15px 20px 5px;
+    font-size: 12px;
+    color: #888;
+    font-weight: 600;
+}
+
+.menu-item {
+    padding: 15px 20px;
+    /* Increased vertical padding */
+    display: flex;
+    align-items: center;
+    cursor: default;
+    transition: background 0.2s, color 0.2s;
+    font-size: 14px;
+}
+
+.menu-item:hover {
+    background-color: #eaeaea;
+}
+
+.menu-item.active {
+    background-color: #fff;
+    color: var(--primary-color);
+    border-left: 4px solid var(--primary-color);
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.menu-item .icon {
+    margin-right: 10px;
+    font-size: 16px;
+}
+
+/* Content Area */
+#content {
+    flex: 1;
+    overflow: hidden;
+    /* Parent of view-section handles its own scroll */
+    background-color: var(--bg-color);
+    /* 40px left-right padding is handled by .view-content, so #content needs none or just base */
+}
+
+h1 {
+    font-size: 24px;
+    margin-top: 0;
+    /* Removing top margin */
+    margin-bottom: 15px;
+    font-weight: 600;
+}
+
+/* ERP Compact Layout (4-Column) */
+.erp-container {
+    display: flex;
+    flex-direction: column;
+    /* height: 100%; removed to allow content to grow */
+}
+
+.erp-compact-layout {
+    display: flex;
+    flex-direction: column;
+    /* overflow-y: auto; removed */
+    /* flex: 1; removed */
+    margin: 0;
+    border: none;
+    border-top: 1px solid #e0e0e0;
+    /* Keep top border only */
+    border-radius: 0;
+}
+
+.erp-row {
+    display: flex;
+    border-bottom: 1px solid #e0e0e0;
+    /* Allow height to grow with content */
+}
+
+/* Left Label Column (Col 1) */
+.erp-label-col {
+    width: 100px;
+    background-color: #f9f9f9;
+    padding: 15px;
+    /* Standardized to 15px */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    color: var(--primary-color);
+    border-right: 1px solid #e0e0e0;
+    font-size: 14px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+/* Right Content Column (Cols 2, 3, 4) */
+.erp-content-col {
+    flex: 1;
+    padding: 15px;
+    /* Standardized to 15px */
+}
+
+/* 3-Column Grid for Substation/Etc */
+.erp-grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+}
+
+/* Electric Room Groups: 3 Explicit Columns */
+.erp-group-container {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    height: 100%;
+}
+
+.erp-group-stack {
+    display: flex;
+    flex-direction: column;
+}
+
+.erp-sub-header {
+    text-align: center;
+    font-size: 12px;
+    font-weight: bold;
+    color: #666;
+    background-color: #f5f5f5;
+    padding: 4px;
+    border-radius: 4px;
+    margin-bottom: 6px;
+    border: 1px solid #eee;
+}
+
+.erp-btn-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* Button Styles */
+.erp-btn {
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 13px;
+    text-align: center;
+    transition: all 0.2s;
+    user-select: none;
+    min-height: 35px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    word-break: keep-all;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.erp-btn:hover {
+    background-color: #f1f8e9;
+    border-color: #aaa;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.erp-btn.selected {
+    background-color: var(--primary-color);
+    color: white;
+    font-weight: bold;
+    border-color: var(--primary-color);
+    box-shadow: 0 2px 5px rgba(76, 175, 80, 0.3);
+}
+
+
+
+.erp-footer {
+    padding: 15px;
+    border-top: 1px solid #e0e0e0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: auto;
+}
+
+.erp-action-buttons {
+    display: flex;
+    gap: 10px;
+}
+
+/* ERP Batch Mode Layout */
+.erp-batch-layout {
+    display: flex;
+    flex-direction: column;
+    padding: 10px;
+    height: 100%;
+    overflow-y: auto;
+}
+
+.erp-batch-table {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    background: #fff;
+}
+
+.erp-batch-header-row {
+    display: flex;
+    background-color: #f5f5f5;
+    border-bottom: 2px solid #ddd;
+    font-weight: bold;
+    font-size: 13px;
+    color: #333;
+}
+
+.batch-col-header {
+    flex: 1;
+    padding: 10px;
+    text-align: center;
+    border-right: 1px solid #e0e0e0;
+}
+
+.batch-col-header.loc-col {
+    flex: 1.5;
+    /* location column is slightly wider */
+}
+
+.batch-col-header:last-child {
+    border-right: none;
+}
+
+.erp-batch-body {
+    display: flex;
+    flex-direction: column;
+}
+
+.erp-batch-row {
+    display: flex;
+    border-bottom: 1px solid #eee;
+    transition: background-color 0.2s;
+}
+
+.erp-batch-row:last-child {
+    border-bottom: none;
+}
+
+.erp-batch-row:hover {
+    background-color: #f9f9f9;
+}
+
+.erp-batch-cell {
+    flex: 1;
+    padding: 3px;
+    /* Reduced from 8px to minimize height */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-right: 1px solid #eee;
+}
+
+/* Category column (Type) */
+.batch-col-header.type-col,
+.erp-batch-cell.type-col {
+    flex: 0 0 75px;
+    /* 약간 넓힘 (구분 열) */
+}
+
+.erp-batch-cell.type-col {
+    color: #555;
+    font-size: 13px;
+    /* 헤더 스타일과 톤 앤 매너 통일 */
+    font-weight: 500;
+}
+
+/* 1열 병합 느낌을 주기 위해 위쪽 테두리를 없애는 유틸 (Vue에서 bind) */
+.erp-batch-cell.type-col.hide-border {
+    border-top: none;
+    color: transparent;
+    /* 글자 숨김 */
+}
+
+.batch-col-header.loc-col,
+.erp-batch-cell.loc-col {
+    flex: 0 0 130px;
+    /* 점검장소 텍스트 두 줄 방지 위해 넓이 강제 확보 */
+}
+
+/* Merged Workers Group column */
+.batch-col-header.workers-group-header,
+.erp-batch-cell.workers-group-cell {
+    flex: 1;
+    /* Take up all remaining space */
+}
+
+.erp-batch-cell.workers-group-cell {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+    /* 점검자 버튼들 중앙 정렬 피드백 반영 */
+    align-items: center;
+}
+
+.erp-batch-cell:last-child {
+    border-right: none;
+}
+
+/* Button style overrides for batch mode */
+.erp-batch-cell .erp-btn {
+    width: auto;
+    min-width: 48px;
+    /* Fit 3 chars */
+    min-height: 28px;
+    margin: 0;
+    padding: 2px 5px;
+    font-size: 13px;
+    letter-spacing: -0.5px;
+    flex: 1;
+    /* (피드백) 셀 내부에서 꽉 차게 수정 */
+    white-space: nowrap;
+    /* (피드백) 텍스트 두 줄 내려짐 방지 */
+}
+
+.erp-batch-cell.workers-group-cell .erp-btn {
+    flex: 0 0 auto;
+    /* 점검자 버튼은 텍스트 길이에 맞추고 꽉 차지 않게 함 */
+}
+
+/* Fix CSS Specificity for selected state when not disabled */
+#erp-batch-container .erp-batch-cell .erp-btn.selected {
+    background-color: var(--primary-color) !important;
+    color: white !important;
+    font-weight: bold !important;
+    border-color: var(--primary-color) !important;
+}
+
+/* Disabled worker buttons in batch mode */
+#erp-batch-container .erp-batch-cell .erp-btn[disabled] {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background-color: #f0f0f0;
+    border-color: #ddd;
+    color: #aaa;
+}
+
+/* Worker Format Toggle in Footer */
+.worker-format-toggle-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: #666;
+}
+
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 34px;
+    height: 20px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: .4s;
+}
+
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 14px;
+    width: 14px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .4s;
+}
+
+input:checked+.slider {
+    background-color: var(--primary-color);
+}
+
+input:checked+.slider:before {
+    transform: translateX(14px);
+}
+
+.slider.round {
+    border-radius: 20px;
+}
+
+.slider.round:before {
+    border-radius: 50%;
+}
+
+.toggle-label-text.bold-active {
+    font-weight: bold;
+    color: #333;
+}
+
+/* Modal Worker Grid: 1 Column */
+.worker-list-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    /* 1 Column */
+    gap: 8px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.worker-checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border: 1px solid #eee;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.worker-checkbox-item:hover {
+    background-color: #f5f5f5;
+}
+
+.worker-checkbox-item input[type="checkbox"] {
+    cursor: pointer;
+}
+
+/* --- ERP Batch Modal Styles --- */
+.batch-confirm-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 20px;
+    max-height: 250px;
+    overflow-y: auto;
+    font-size: 0.95em;
+    padding: 10px;
+    background-color: #f9f9f9;
+    border-radius: 8px;
+    border: 1px solid #eee;
+}
+
+.batch-confirm-item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+}
+
+.batch-confirm-loc {
+    font-weight: bold;
+    color: #1976D2;
+    white-space: pre; /* 스페이스 유지 중요 */
+    text-align: right;
+}
+
+.batch-confirm-dash {
+    color: #666;
+    margin: 0 5px;
+}
+
+.batch-confirm-workers {
+    color: #333;
+    white-space: pre; 
+    text-align: left;
+}
+
+.modal-option-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+}
+
+.text-toggle-btn {
+    background: none;
+    border: 1px solid #ddd;
+    /* Add border to make it look like a button */
+    border-radius: 4px;
+    color: #333;
+    /* Default color */
+    cursor: pointer;
+    padding: 4px 8px;
+    font-size: 14px;
+    font-weight: normal;
+    /* Default normal */
+}
+
+.text-toggle-btn:hover {
+    background-color: #f0f0f0;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #ccc;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #bbb;
+}
+
+/* Sections */
+.view-section {
+    display: none;
+    /* Flex Container for Header-Content-Footer Layout */
+    flex-direction: column;
+    height: 100%;
+    /* Full Height */
+    overflow: hidden;
+    /* Prevent Double Scroll */
+    animation: fadeIn 0.3s ease;
+}
+
+.view-section.active {
+    display: flex;
+    /* Changed from block to flex */
+}
+
+/* 1. Fixed Header */
+.view-header {
+    flex-shrink: 0;
+    padding: 25px 40px 0 40px;
+    /* Increased to 25px */
+    background-color: var(--bg-color);
+    z-index: 10;
+}
+
+/* 2. Scrollable Content */
+.view-content {
+    flex: 1;
+    /* Take remaining space */
+    overflow-y: auto;
+    /* Scroll here */
+    padding: 10px 40px;
+    /* Side padding */
+}
+
+/* 3. Fixed Footer */
+.view-footer {
+    flex-shrink: 0;
+    height: 62px;
+    /* Fixed height to match sidebar settings button area */
+    padding: 0 40px;
+    /* Side padding only, vertical centering via flex */
+    background-color: #fff;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    z-index: 10;
+    margin-top: auto;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(5px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+h1 {
+    font-size: 24px;
+    margin-bottom: 10px;
+    font-weight: 600;
+}
+
+.description {
+    color: #666;
+    margin-bottom: 30px;
+}
+
+/* Form Elements */
+.form-group {
+    margin-bottom: 5px;
+}
+
+label {
+    display: block;
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 5px;
+}
+
+input[type="text"],
+input[type="password"],
+select,
+input[type="number"] {
+    width: 100%;
+    max-width: 400px;
+    padding: 8px 12px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 14px;
+    outline: none;
+    transition: border 0.2s;
+}
+
+select {
+    cursor: default;
+    /* Arrow cursor for dropdowns */
+}
+
+input:focus,
+select:focus {
+    border-color: var(--primary-color);
+}
+
+input[readonly] {
+    background-color: #f9f9f9;
+    color: #888;
+}
+
+/* Buttons */
+button {
+    padding: 8px 16px;
+    border-radius: 4px;
+    border: none;
+    font-size: 14px;
+    transition: 0.2s;
+}
+
+button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    pointer-events: none;
+    background-color: #e0e0e0 !important;
+    color: #999 !important;
+    border-color: #ccc !important;
+}
+
+.save-btn,
+.primary-btn {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.save-btn:hover,
+.primary-btn:hover {
+    background-color: #43a047;
+}
+
+.secondary-btn {
+    background-color: #eee;
+    color: #333;
+}
+
+.secondary-btn:hover {
+    background-color: #ddd;
+}
+
+.large-btn {
+    min-width: 150px;
+    padding: 8px 16px;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+/* Cards */
+.card {
+    background: white;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.02);
+}
+
+/* Data Tables (Excel-like) */
+.data-grid-container {
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.data-table th,
+.data-table td {
+    padding: 10px;
+    border-bottom: 1px solid #eee;
+    text-align: left;
+}
+
+.row {
+    display: flex;
+    gap: 15px;
+}
+
+.col {
+    flex: 1;
+}
+
+.inline-field {
+    display: flex;
+    align-items: center;
+}
+
+.inline-field label {
+    /* Fixed width for alignment REMOVED for refactoring */
+    margin-bottom: 0;
+    /* margin: 10px; REMOVED global spacing */
+    white-space: nowrap;
+}
+
+/* 
+   ==========================================================================
+   Standard Form Styles (Refactored) 
+   - Replaces .inline-field, .form-group for new implementations
+   - Scoped to prevent global side effects
+   ========================================================================== 
+*/
+
+.std-form-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+    gap: 8px;
+    /* Default gap */
+}
+
+.std-label {
+    font-weight: 500;
+    color: #555;
+    white-space: nowrap;
+    margin: 0;
+}
+
+/* For Settings Tab where fixed width label is preferred */
+.std-label.fixed-70 {
+    min-width: 70px;
+    margin-right: 15px;
+}
+
+.std-input {
+    flex: 1;
+    padding: 6px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 13px;
+    /* Standardize font size */
+    background-color: #fff;
+}
+
+.std-input:focus {
+    outline: 2px solid var(--primary-color);
+    border-color: transparent;
+}
+
+/* Time Input Specifics */
+.std-input.time-input {
+    width: 50px;
+    text-align: center;
+    flex: 0 0 50px;
+    /* Don't grow/shrink */
+}
+
+/* Date Input Specifics */
+.std-input.date-input {
+    width: 90px;
+    text-align: center;
+    flex: 0 0 90px;
+}
+
+.inline-field input,
+.inline-field select {
+    flex: 1;
+}
+
+.data-table tr:hover {
+    background-color: #f5fcf5;
+    /* Subtle green tint */
+}
+
+.data-table td.editable {
+    cursor: text;
+}
+
+.data-table td.editable:hover {
+    background-color: #fff;
+    box-shadow: inset 0 0 0 1px var(--primary-color);
+}
+
+.add-row-btn {
+    width: 100%;
+    background: white;
+    color: var(--primary-color);
+    text-align: center;
+}
+
+/* Old ERP styles removed */
+
+/* Table Delete Button Styles */
+.small-btn.danger {
+    background-color: transparent;
+    color: #999;
+    border: 1px solid transparent;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: all 0.2s;
+    font-weight: bold;
+}
+
+.small-btn.danger:hover {
+    background-color: #ffebee;
+    color: #d32f2f;
+    border-color: #ffcdd2;
+}
+
+/* Update History Styles */
+.release-list-container {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.release-item {
+    background: #fdfdfd;
+    border: 1px solid #eee;
+    border-radius: 6px;
+    padding: 15px;
+    transition: transform 0.2s;
+}
+
+.release-item:hover {
+    transform: translateX(5px);
+    border-color: #ddd;
+}
+
+.release-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #f0f0f0;
+    padding-bottom: 5px;
+}
+
+.release-ver {
+    font-size: 16px;
+    font-weight: bold;
+    color: var(--primary-color);
+}
+
+.release-date {
+    font-size: 12px;
+    color: #999;
+}
+
+.release-body {
+    font-size: 13px;
+    color: #555;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    /* Preserve newlines */
+}
+
+.loading-spinner {
+    text-align: center;
+    padding: 20px;
+    color: #888;
+}
+
+/* --- Work Log Styles (2-Column Refactor) --- */
+.work-log-container {
+    padding: 0;
+    /* Padding moved to view-content */
+    display: flex;
+    flex-direction: column;
+    /* Stack main + footer */
+    height: 100%;
+    /* Take full height allowed by flex */
+    gap: 0;
+}
+
+.work-log-main {
+    display: flex;
+    flex: 1;
+    /* Grow to fill content area */
+    gap: 15px;
+    /* overflow: hidden; */
+    /* Scroll handled by view-content */
+    flex-wrap: wrap;
+    /* Allow wrapping if needed, but mainly for structure */
+}
+
+/* Left Column */
+.left-col {
+    width: auto;
+    /* shrink to fit content */
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    flex-shrink: 0;
+    min-width: 200px;
+}
+
+.right-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+    /* Scroll handled by view-content */
+}
+
+/* Footer Area for Start Button */
+.work-log-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 10px;
+    border-top: 1px solid #eee;
+    margin-top: 10px;
+}
+
+.section-title {
+    margin: 0 0 10px 0;
+    font-size: 18px;
+    color: #333;
+    border-bottom: 2px solid #eee;
+    padding-bottom: 5px;
+}
+
+.control-box {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.control-box.expanded-box {
+    flex: 1;
+    /* Pushes footer down if needed, but in 2-col left side usually fixed height or scroll */
+    /* Let's not force expand, just take space */
+}
+
+/* Option Groups */
+.option-group {
+    background: #f9f9f9;
+    padding: 15px;
+    /* Standardized to 15px */
+    border-radius: 8px;
+    border: 1px solid #eee;
+    display: flex;
+    gap: 15px;
+    flex-wrap: wrap;
+}
+
+.option-group.vertical-group {
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* Checkbox/Radio */
+.radio-label,
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    user-select: none;
+}
+
+.radio-label input,
+.checkbox-label input {
+    cursor: pointer;
+    margin: 0;
+    width: 16px;
+    height: 16px;
+}
+
+.action-btn-area {
+    margin-top: auto;
+    /* Push to bottom of left col */
+    padding-top: 20px;
+}
+
+.full-width {
+    width: 100%;
+}
+
+/* Worker List */
+.worker-section {
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+    /* flex: 1; handled by right-col */
+}
+
+.section-header {
+    background: #f5f5f5;
+    padding: 10px 15px;
+    border-bottom: 1px solid #e0e0e0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.section-header h3 {
+    margin: 0;
+    font-size: 15px;
+    color: #333;
+}
+
+.sub-text {
+    font-size: 12px;
+    color: #666;
+}
+
+.worker-list-header {
+    display: flex;
+    background: #fafafa;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 8px 10px;
+    font-weight: 600;
+    font-size: 13px;
+    color: #555;
+    align-items: center;
+    gap: 8px;
+    /* Added gap */
+}
+
+.worker-list-body {
+    flex: 1;
+    overflow-y: visible;
+    /* Scroll handled by view-content */
+    padding: 5px 0;
+}
+
+.worker-row {
+    display: flex;
+    padding: 6px 10px;
+    border-bottom: 1px solid #f0f0f0;
+    align-items: center;
+    font-size: 14px;
+    transition: background 0.1s;
+    gap: 8px;
+    /* Added gap */
+}
+
+.worker-row:hover {
+    background: #f9f9f9;
+}
+
+/* Columns */
+.wl-chk {
+    width: 40px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.wl-chk .checkbox-label {
+    margin: 0;
+}
+
+/* Wider */
+.wl-name {
+    flex: 1;
+    width: 60px;
+}
+
+/* .wl-role removed */
+.wl-note {
+    flex: 1;
+}
+
+.wl-drive {
+    flex: 1;
+    min-width: 60px;
+    text-align: center;
+}
+
+/* Dynamic Visibility */
+.hidden-col {
+    display: none !important;
+}
+
+/* Input Styles in List */
+.wl-note input {
+    width: 100%;
+    padding: 6px;
+    font-size: 13px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: #f5f5f5;
+}
+
+.wl-note input:focus,
+.wl-note input:hover {
+    border-color: #ddd;
+    background: #fff;
+}
+
+.wl-drive select {
+    padding: 4px;
+    font-size: 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+/* Worker Format Toggle */
+/* Worker Format Toggle */
+.worker-format-toggle-container {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    /* Removed bg, border, padding for cleaner look */
+}
+
+
+
+.toggle-label-text {
+    font-size: 13px;
+    color: #666;
+}
+
+.toggle-label-text.bold-on-active {
+    color: #333;
+}
+
+/* Toggle Switch */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: .4s;
+}
+
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 16px;
+    width: 16px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .4s;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+input:checked+.slider {
+    background-color: var(--primary-color);
+}
+
+input:focus+.slider {
+    box-shadow: 0 0 1px var(--primary-color);
+}
+
+input:checked+.slider:before {
+    transform: translateX(18px);
+}
+
+.slider.round {
+    border-radius: 34px;
+}
+
+.slider.round:before {
+    border-radius: 50%;
+}
+
+/* ERP Worker Modal Styles */
+.modal-overlay {
+    position: fixed;
+    top: var(--title-bar-height);
+    /* Below custom titlebar */
+    left: 0;
+    width: 100%;
+    height: calc(100vh - var(--title-bar-height));
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 2000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    animation: fadeIn 0.2s;
+}
+
+.modal-content {
+    background: white;
+    width: 280px;
+    height: auto;
+    max-height: 90vh;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.modal-header {
+    padding: 10px 20px;
+    border-bottom: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.modal-header h3 {
+    margin: 0;
+    font-size: 16px;
+}
+
+.close-btn-icon {
+    background: none;
+    border: none;
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+    color: #999;
+}
+
+.close-btn-icon:hover {
+    color: #333;
+}
+
+.modal-body {
+    padding: 10px 20px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.modal-option-row {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+    margin-bottom: 0;
+    padding-bottom: 0px;
+    border-bottom: none;
+    color: #000;
+}
+
+.text-toggle-btn {
+    background: none;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    color: #000;
+}
+
+.text-toggle-btn.active {
+    font-weight: bold;
+    color: var(--primary-color);
+    border-color: var(--primary-color);
+    background-color: #f1f8e9;
+}
+
+.modal-list-header {
+    margin-bottom: 10px;
+    background: #f9f9f9;
+    padding: 8px 12px;
+    border-radius: 4px;
+}
+
+.worker-list-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    /* 1 column */
+    gap: 0;
+    max-height: none;
+    overflow-y: visible;
+    margin-bottom: 15px;
+}
+
+.worker-checkbox-item {
+    display: block;
+    /* Let inner content handle flex */
+    padding: 2px 0;
+    border: none;
+    border-radius: 0;
+    cursor: auto;
+    /* Cursor handled by label */
+    color: #000;
+}
+
+.worker-checkbox-item:hover {
+    background-color: transparent;
+    border-color: transparent;
+}
+
+.worker-checkbox-item input {
+    margin: 0;
+    width: 16px;
+    height: 16px;
+}
+
+.modal-footer {
+    padding: 10px 20px;
+    border-top: 1px solid #eee;
+    background: #fdfdfd;
+}
+
+.full-width {
+    width: 100%;
+}
+
+
+/* Grid System for Forms */
+.input-grid {
+    display: grid;
+    gap: 10px;
+    width: 100%;
+}
+
+.input-grid.g-1 {
+    grid-template-columns: 1fr;
+}
+
+.input-grid.g-2 {
+    grid-template-columns: 1fr 1fr;
+}
+
+.input-grid.g-3 {
+    grid-template-columns: 1fr 1fr 1fr;
+}
+
+.input-grid.g-4 {
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+}
+
+.mt-2 {
+    margin-top: 10px;
+}
+
+/* Form Section Styling */
+.form-container {
+    /* padding: 10px; */
+    /* Moved to .view-content */
+    height: auto;
+    /* Let it grow */
+    overflow-y: visible;
+    /* Scroll handled by .view-content */
+    padding-bottom: 0px;
+    /* Space for footer */
+}
+
+.form-section {
+    background: #f9f9f9;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 15px;
+}
+
+.form-section h3 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    font-size: 14px;
+    color: #333;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 5px;
+}
+
+/* Compact Inputs */
+.form-group label {
+    display: block;
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 4px;
+}
+
+/* Standard Input Styles (applied to form-group and sub-group) */
+.form-group input,
+.form-group select,
+.sub-group input,
+.sub-group select {
+    width: 100%;
+    padding: 6px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+    box-sizing: border-box;
+    height: 30px;
+    /* Enforce exact height */
+    line-height: normal;
+    /* Reset line-height */
+}
+
+.form-group input:focus,
+.form-group select:focus,
+.sub-group input:focus,
+.sub-group select:focus {
+    border-color: #0063B5;
+    outline: none;
+}
+
+/* Match sub-label to form-group label */
+.sub-group .sub-label {
+    display: block;
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 4px;
+}
+
+/* Pair Input (Name + Phone) */
+.pair-input {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+}
+
+.pair-input input:nth-child(1) {
+    flex: 1;
+}
+
+/* Name */
+.pair-input input:nth-child(2) {
+    flex: 1.5;
+}
+
+/* Range Inputs (Start ~ End): 2nd input is 3rd child */
+.pair-input input:nth-child(3) {
+    flex: 1;
+}
+
+/* Phone */
+
+.read-only-text {
+    font-size: 13px;
+    color: #555;
+    white-space: nowrap;
+    padding: 0 5px;
+}
+
+/* Checkbox Alignment */
+.checkbox-align {
+    display: flex;
+    align-items: flex-end;
+    height: 100%;
+    padding-bottom: 0px;
+    /* Removed padding */
+    /* Visual alignment with inputs */
+}
+
+/* Header & Preset Controls */
+.header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.preset-controls {
+    display: flex;
+    gap: 10px;
+}
+
+.preset-select {
+    padding: 6px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+    font-size: 13px;
+    height: auto;
+    /* Auto height */
+    box-sizing: border-box;
+    min-width: 150px;
+}
+
+.preset-controls button {
+    height: auto;
+    /* Match select */
+    padding: 6px 12px;
+    font-size: 13px;
+    min-width: 60px;
+    white-space: nowrap;
+}
+
+/* Action Footer */
+/* Action Footer */
+/* Action Footer - Now used as .view-footer content or replaced by it */
+.action-footer {
+    /* position: sticky; */
+    /* Removed sticky */
+    /* bottom: 0; */
+    background: transparent;
+    /* Background handled by view-footer */
+    padding: 0;
+    /* Padding handled by view-footer */
+    border-top: none;
+    /* Border handled by view-footer */
+    margin-top: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    /* Ensure full width inside view-footer */
+}
+
+/* Responsive adjustments */
+@media (max-width: 700px) {
+    .input-grid.g-4 {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+/* Tilde Separator */
+.tilde {
+    padding: 0 5px;
+    font-weight: bold;
+    color: #666;
+    align-self: center;
+}
+
+/* Icon Button */
+.icon-btn {
+    background: none;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    cursor: pointer;
+    padding: 4px 8px;
+    font-size: 14px;
+    color: #555;
+    transition: all 0.2s;
+}
+
+.icon-btn:hover {
+    background-color: #eee;
+    color: #333;
+}
+
+/* Danger Button */
+.danger-btn {
+    background-color: #dc3545;
+    color: white;
+    border: 1px solid #dc3545;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.2s;
+}
+
+.danger-btn:hover {
+    background-color: #c82333;
+    border-color: #bd2130;
+}
+
+.danger-btn.small {
+    padding: 4px 8px;
+    font-size: 12px;
+}
+
+/* Full Width Col for Grid */
+.full-width-col {
+    grid-column: span 2;
+    /* Spans 2 columns in a g-2 grid */
+}
+
+/* Grid Column Wrapper */
+.grid-col {
+    display: flex;
+    flex-direction: column;
+    /* Reduced from 10px */
+}
+
+/* Safety Management Section */
+
+/* 1. 전체 구역 레이아웃 (기존 유지) */
+.work-log-safety-section {
+    margin-top: 15px;
+    padding-bottom: 15px;
+    padding-top: 15px;
+    border-top: 1px solid #e0e0e0;
+}
+
+.safety-header h3 {
+    margin: 0 0 10px 0;
+    font-size: 14px;
+    color: #333;
+    font-weight: 600;
+}
+
+.safety-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.safety-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.safety-time-group {
+    flex: 1;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+.time-pair {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: #666;
+    white-space: nowrap;
+}
+
+
+/* =========================================================
+   2. 입력폼 스타일 통합 (새로 작성된 부분)
+   ========================================================= */
+
+/* 안전관리 구역 내의 모든 input에 공통 적용 (우선순위 높음) */
+.work-log-safety-section input {
+    padding: 6px;
+    /* 높이 통일 */
+    font-size: 13px;
+    /* 글자 크기 통일 */
+    border: 1px solid #c0c0c0;
+    /* 테두리 통일 */
+    border-radius: 4px;
+    /* 둥글기 통일 */
+    text-align: center;
+    /* 기본 가운데 정렬 */
+    min-width: 45px;
+    /*최소길이 확보*/
+}
+
+/* 포커스 효과 공통 정의 */
+.work-log-safety-section input:focus {
+    outline: 2px solid var(--primary-color);
+    border-color: transparent;
+}
+
+/* 개별 특징만 남겨둠 */
+.work-log-safety-section input.safety-input-content {
+    flex: 1;
+    /* 꽉 차게 늘어남 */
+    text-align: left;
+    /* 내용은 왼쪽 정렬 */
+}
+
+.safety-input-date {
+    width: 90px;
+    /* 날짜 너비 고정 */
+}
+
+.safety-input-time {
+    width: 60px;
+    /* 시간 너비 고정 */
+}
+
+/* Preset Section Styles */
+.preset-section {
+    margin-bottom: 25px;
+    padding: 15px;
+    background-color: #fff;
+    border: 1px solid #eee;
+    border-radius: 8px;
+}
+
+.preset-section h3 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    font-size: 16px;
+    color: #333;
+    border-bottom: 2px solid #f0f0f0;
+    padding-bottom: 8px;
+}
+
+.divider {
+    border: 0;
+    height: 1px;
+    background: #e0e0e0;
+    margin: 20px 0;
+}
+
+/* Safety Set - 일지 프리셋: 유저정보(inline-field)와 동일 행 배치 */
+.safety-set {
+    margin-bottom: 5px;
+    /* 다른 form-group과 유사한 간격 */
+}
+
+.safety-inputs {
+    display: flex;
+    flex: 1;
+    gap: 8px;
+    align-items: center;
+    /* 유저정보 입력폼과 같은 수직 정렬 */
+}
+
+/* 안전 프리셋 내부 '시작', '종료' 라벨: 행 안에서 작게 붙는 텍스트 */
+.safety-inputs label {
+    display: inline-flex;
+    align-items: center;
+    margin: 0 4px 0 0;
+    font-size: 12px;
+    font-weight: 400;
+    color: #666;
+    white-space: nowrap;
+}
+
+.safety-inputs input[type='text'] {
+    padding: 6px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+.safety-inputs input:first-child {
+    flex: 1;
+    /* Content expands */
+}
+
+.safety-inputs .time-input {
+    width: 60px !important;
+    text-align: center;
+    flex: 0 0 60px;
+}
+
+/* Toggle Row */
+.toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    font-size: 14px;
+}
+
+/* Auto Input Row */
+.auto-input-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.auto-input-row .time-input {
+    width: 80px !important;
+    padding: 6px;
+    text-align: center;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    flex: 0 0 80px;
+}
+
+/* Preset Section Styles */
+.preset-section {
+    margin-bottom: 25px;
+    padding: 15px;
+    background-color: #fff;
+    border: 1px solid #eee;
+    border-radius: 8px;
+}
+
+.preset-section h3 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    font-size: 16px;
+    color: #333;
+    border-bottom: 2px solid #f0f0f0;
+    padding-bottom: 8px;
+}
+
+.divider {
+    border: 0;
+    height: 1px;
+    background: #e0e0e0;
+    margin: 20px 0;
+}
+
+/* Safety Set */
+.safety-set {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.safety-set>label {
+    margin-right: 6px;
+    /* 제목 레이블과 첫 입력폼 사이 여백 최소화 */
+    /*font-size: 13px;*/
+    font-weight: 600;
+    color: #555;
+    flex-shrink: 0;
+}
+
+.safety-inputs {
+    display: flex;
+    flex: 1;
+    gap: 8px;
+}
+
+.safety-inputs input[type="text"] {
+    padding: 6px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+.safety-inputs input:first-child {
+    flex: 1;
+    /* Content expands */
+}
+
+.safety-inputs .time-input {
+    width: 50px !important;
+    text-align: center;
+    flex: 0 0 50px;
+}
+
+/* Toggle Row */
+.toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    font-size: 14px;
+}
+
+/* Auto Input Row */
+.auto-input-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.auto-input-row .time-input {
+    width: 80px !important;
+    padding: 6px;
+    text-align: center;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    flex: 0 0 80px;
+}

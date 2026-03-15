@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>통합자동화</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="lib/vue.global.prod.js"></script>
+</head>
+
+<body>
+    <!-- Custom Title Bar -->
+    <div id="title-bar">
+        <div id="title-drag-area">
+            <span id="app-title">통합자동화 v3.0</span>
+        </div>
+        <div id="window-controls">
+            <div class="control-btn" id="btn-min" onclick="window.minimizeWindow()">
+                <svg viewBox="0 0 10 1">
+                    <path d="M0 0h10v1H0z" />
+                </svg>
+            </div>
+            <div class="control-btn close-btn" id="btn-close" onclick="window.closeWindow()">
+                <svg viewBox="0 0 10 10">
+                    <path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1.2" />
+                </svg>
+            </div>
+        </div>
+    </div>
+
+    <!-- Login Container -->
+    <div id="login-container">
+
+        <!-- View 1: User Selection -->
+        <div id="login-view" class="login-card">
+            <h2>사용자 선택</h2>
+            <div id="user-list-container">
+                <!-- Javascript populated -->
+            </div>
+            <div class="login-footer">
+                <button id="btn-next" class="primary-btn" onclick="moveToPasswordView()"
+                    style="width:100%; margin-bottom:10px;" disabled>다음</button>
+                <div style="display:flex; gap:10px; width:100%;">
+                    <button class="secondary-btn small" onclick="switchView('add')" style="flex:1;">+ 새 사용자</button>
+                    <button id="btn-delete" class="secondary-btn small danger" onclick="deleteUser()" style="flex:1;"
+                        disabled>삭제</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- View 1.5: Password Entry (Modal-like) -->
+        <div id="password-view" class="login-card" style="display: none; position: relative;">
+            <button class="icon-back-btn" onclick="backToUserList()" title="뒤로가기">
+                <svg viewBox="0 0 24 24" width="24" height="24">
+                    <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" fill="currentColor" />
+                </svg>
+            </button>
+
+            <h2 id="pwd-user-name" style="margin-top: 20px;">User Name</h2>
+            <p id="pwd-user-id" style="text-align:center; color:#666; margin-top:-10px;">(User ID)</p>
+
+            <div class="login-input-area" style="width: 100%; margin: 20px 0;">
+                <input type="password" id="login-pw2" placeholder="2차 비밀번호를 입력하세요" class="full-width-input"
+                    onkeydown="handleLoginKey(event)">
+            </div>
+
+            <div class="login-actions" style="justify-content: center; display: flex;">
+                <button class="primary-btn" onclick="tryLogin()" style="width: 100%;">로그인</button>
+            </div>
+        </div>
+
+        <!-- View 2: Add User (Registration) -->
+        <div id="add-user-view" style="display: none;">
+            <h3>새 사용자 등록</h3>
+            <div class="form-row">
+                <div class="form-group"><label>이름 *</label><input type="text" id="new-name"></div>
+                <div class="form-group"><label>사번 *</label><input type="text" id="new-id" maxlength="6"></div>
+            </div>
+
+            <div class="form-group"><label>근무조</label>
+                <select id="new-team" style="width: 100%;">
+                    <option>A조</option>
+                    <option>B조</option>
+                    <option>C조</option>
+                    <option>D조</option>
+                    <option>일근</option>
+                </select>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group"><label>통합 PW *</label><input type="password" id="new-webpw"></div>
+                <div class="form-group"><label>확인 *</label><input type="password" id="new-webpw2"></div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group"><label>2차 PW *</label><input type="password" id="new-pw2" maxlength="6"></div>
+                <div class="form-group"><label>확인 *</label><input type="password" id="new-pw2-confirm" maxlength="6">
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group"><label>SAP PW</label><input type="password" id="new-sappw"></div>
+                <div class="form-group"><label>확인</label><input type="password" id="new-sappw2"></div>
+            </div>
+
+            <div class="actions" style="margin-top: 10px;">
+                <button class="primary-btn" onclick="submitNewUser()">등록</button>
+                <button class="secondary-btn" onclick="switchView('login')">취소</button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Main Container (Hidden Initially) -->
+    <div id="app-container" style="display: none;">
+        <!-- Sidebar -->
+        <nav id="sidebar">
+            <div class="nav-top">
+                <div class="menu-item active" data-target="view-work-log" onclick="switchMainTab('view-work-log')">
+                    <span class="icon">📅</span>
+                    <span class="label">업무일지</span>
+                </div>
+                <div class="menu-item" data-target="view-erp-check" onclick="switchMainTab('view-erp-check')">
+                    <span class="icon">📋</span>
+                    <span class="label">ERP일일점검</span>
+                </div>
+                <div class="menu-item" data-target="view-track-access" onclick="switchMainTab('view-track-access')">
+                    <span class="icon">🚧</span>
+                    <span class="label">선로출입관리</span>
+                </div>
+                <div class="menu-item" data-target="view-vehicle-log" onclick="switchMainTab('view-vehicle-log')">
+                    <span class="icon">🚗</span>
+                    <span class="label">차량운행일지</span>
+                </div>
+            </div>
+            <div class="nav-bottom">
+                <!-- Shift Status Panel -->
+                <div id="shift-status-panel" class="shift-panel" style="display:none;"> <!-- 초기 숨김 -->
+                    <div class="shift-row">
+                        <div class="shift-group">
+                            <div class="shift-date" id="shift-prev-date"></div>
+                            <div class="shift-item prev" id="shift-prev">D</div>
+                        </div>
+                        <div class="shift-arrow">→</div>
+                        <div class="shift-group">
+                            <div class="shift-date" id="shift-current-date"></div>
+                            <div class="shift-item current" id="shift-current">C</div>
+                        </div>
+                        <div class="shift-arrow">→</div>
+                        <div class="shift-group">
+                            <div class="shift-date" id="shift-next-date"></div>
+                            <div class="shift-item next" id="shift-next">B</div>
+                        </div>
+                    </div>
+                    <div class="shift-label" id="shift-label-text">야간</div>
+                </div>
+
+                <div class="menu-item settings-btn" onclick="openSettings()">
+                    <span class="icon">⚙️</span>
+                    <span class="label">설정</span>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Content Area -->
+        <main id="content">
+            <!-- Work Log View (Refactored) -->
+            <div id="view-work-log" class="view-section active">
+                <div class="view-header">
+                    <h1>업무일지</h1>
+                </div>
+
+                <div class="view-content">
+                    <div class="work-log-container">
+                        <div class="work-log-main">
+                            <!-- Left Column: Controls -->
+                            <div class="left-col">
+                                <!-- Section Title -->
+                                <!-- <h3 class="section-title">작업 설정</h3> -->
+
+                                <!-- Work Type Toggle -->
+                                <div class="option-group">
+                                    <label class="radio-label">
+                                        <input type="radio" name="work-type" value="day" checked
+                                            onchange="handleWorkTypeChange()">
+                                        <span>주간</span>
+                                    </label>
+                                    <label class="radio-label">
+                                        <input type="radio" name="work-type" value="night"
+                                            onchange="handleWorkTypeChange()">
+                                        <span>야간</span>
+                                    </label>
+                                </div>
+
+                                <!-- Checkbox Group -->
+                                <div class="option-group checkbox-group vertical-group">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="chk-make-log">
+                                        <span>일지생성</span>
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="chk-general" checked>
+                                        <span>일반업무</span>
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="chk-safe-manage" checked>
+                                        <span>안전관리</span>
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="chk-driving">
+                                        <span>운전적합성</span>
+                                    </label>
+                                </div>
+
+                                <!-- Drink Check -->
+                                <div class="option-group vertical-group">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="chk-drink" onchange="toggleDrinkCalibration()">
+                                        <span>주간 음주측정</span>
+                                    </label>
+                                    <label class="checkbox-label" style="margin-left: 20px;">
+                                        <input type="checkbox" id="chk-drink-cal" disabled>
+                                        <span>교정 입고중</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <!-- Right Column: Worker List -->
+                            <div class="right-col">
+                                <div class="worker-section">
+                                    <div class="section-header">
+                                        <h3>작업자 명단 <span id="worker-search-status" class="status-label"
+                                                style="display: none; font-size: 0.8em; color: green; margin-left: 10px;">인원조회완료</span>
+                                        </h3>
+                                        <!-- Select All Removed -->
+                                    </div>
+                                    <div class="worker-list-header">
+                                        <!-- Checkbox Col Removed -->
+                                        <div class="wl-name">이름</div>
+                                        <div class="wl-note">휴가/비고</div>
+                                        <div class="wl-drive hidden-col" id="col-header-drive">운전</div>
+                                    </div>
+                                    <div id="work-log-worker-list" class="worker-list-body">
+                                        <!-- Dynamic Content -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Safety Management Section -->
+                        <div class="work-log-safety-section">
+                            <div class="safety-header">
+                                <h3>안전관리</h3>
+                            </div>
+                            <div class="safety-grid">
+                                <!-- Row 1 -->
+                                <div class="safety-row">
+                                    <input type="text" id="safe-content-1" placeholder="안전관리 내용 (오전/저녁)"
+                                        class="safety-input-content">
+                                    <div class="safety-time-group">
+                                        <input type="text" id="safe-date-1" placeholder="YYYYMMDD"
+                                            class="safety-input-date">
+                                        <div class="time-pair">
+                                            <span>시작</span>
+                                            <input type="text" id="safe-start-1" placeholder="hh:mm"
+                                                class="safety-input-time">
+                                        </div>
+                                        <div class="time-pair">
+                                            <span>종료</span>
+                                            <input type="text" id="safe-end-1" placeholder="hh:mm"
+                                                class="safety-input-time">
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Row 2 -->
+                                <div class="safety-row">
+                                    <input type="text" id="safe-content-2" placeholder="안전관리 내용 (오후/새벽)"
+                                        class="safety-input-content">
+                                    <div class="safety-time-group">
+                                        <input type="text" id="safe-date-2" placeholder="YYYYMMDD"
+                                            class="safety-input-date">
+                                        <div class="time-pair">
+                                            <span>시작</span>
+                                            <input type="text" id="safe-start-2" placeholder="hh:mm"
+                                                class="safety-input-time">
+                                        </div>
+                                        <div class="time-pair">
+                                            <span>종료</span>
+                                            <input type="text" id="safe-end-2" placeholder="hh:mm"
+                                                class="safety-input-time">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="view-footer">
+                    <button class="primary-btn large-btn" onclick="startWorkLog()">시작</button>
+                </div>
+            </div>
+
+            <!-- ERP Check View -->
+            <div id="view-erp-check" class="view-section">
+                <!-- Header -->
+                <div class="view-header">
+                    <div class="header-row">
+                        <h1>ERP일일점검</h1>
+                        <div
+                            style="text-align: right; font-size: 0.9em; color: #666; display: flex; align-items: center; justify-content: flex-end; gap: 10px;">
+                            <span id="erp-last-update"></span>
+                            <button id="btn-refresh-erp" title="새로고침" disabled
+                                style="cursor: pointer; background: none; border: none; font-size: 1.2em; opacity: 0.5;">↻</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Scrollable Content -->
+                <div class="view-content">
+                    <div class="erp-container savable-ui" data-save-key="erpLocation">
+                        <div class="erp-compact-layout" id="erp-individual-container">
+                            <!-- Row 1: Substation -->
+                            <div class="erp-row">
+                                <div class="erp-label-col">변전소</div>
+                                <div class="erp-content-col">
+                                    <div class="erp-grid-3" id="grid-substation"></div>
+                                </div>
+                            </div>
+
+                            <!-- Row 2: Electric Room -->
+                            <div class="erp-row">
+                                <div class="erp-label-col">전기실</div>
+                                <div class="erp-content-col">
+                                    <div class="erp-group-container">
+                                        <div class="erp-group-stack">
+                                            <div class="erp-sub-header">그룹 1</div>
+                                            <div class="erp-btn-stack" id="elec-g1"></div>
+                                        </div>
+                                        <div class="erp-group-stack">
+                                            <div class="erp-sub-header">그룹 2</div>
+                                            <div class="erp-btn-stack" id="elec-g2"></div>
+                                        </div>
+                                        <div class="erp-group-stack">
+                                            <div class="erp-sub-header">그룹 3</div>
+                                            <div class="erp-btn-stack" id="elec-g3"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Row 3: Etc -->
+                            <div class="erp-row">
+                                <div class="erp-label-col">기타업무</div>
+                                <div class="erp-content-col">
+                                    <div class="erp-grid-3" id="grid-etc"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Batch Mode Layout (Vue Managed) -->
+                        <div class="erp-batch-layout" id="erp-batch-container" style="display: none;">
+                            <div class="erp-batch-table">
+                                <div class="erp-batch-header-row" id="erp-batch-header">
+                                    <div class="batch-col-header type-col">구분</div>
+                                    <div class="batch-col-header loc-col">점검장소</div>
+                                    <div class="batch-col-header workers-group-header">점검자 선택</div>
+                                </div>
+                                <div class="erp-batch-body" id="erp-batch-body">
+                                    <!-- Dynamic rows -->
+                                    <template v-for="(loc, index) in locations" :key="loc.name">
+                                        <div class="erp-batch-row">
+                                            <!-- 1열: 구분 (이전 인덱스와 타입이 다를 때만 렌더링, rowSpan 적용 불가하므로 CSS flex 활용 또는 빈 셀 처리) -->
+                                            <div class="erp-batch-cell type-col"
+                                                :class="{'hide-border': index > 0 && locations[index-1].type === loc.type}">
+                                                <span v-if="index === 0 || locations[index-1].type !== loc.type">{{
+                                                    loc.type }}</span>
+                                            </div>
+                                            <!-- 2열: 점검장소 -->
+                                            <div class="erp-batch-cell loc-col">
+                                                <div class="erp-btn" :class="{ 'selected': isRowActive(loc.name) }"
+                                                    @click="toggleRow(loc.name)">
+                                                    <span v-if="completedOrders.includes(loc.order)"
+                                                        class="order-check-mark"
+                                                        style="color: #00C853; margin-right: 5px; font-weight: bold;">&#10004;&#xFE0E;</span>
+                                                    {{ loc.name }}
+                                                    <span
+                                                        v-if="loc.type === '변전소' && latestStatusMap[loc.name] !== undefined"
+                                                        class="status-dot"
+                                                        :style="{ color: latestStatusMap[loc.name] ? '#4CAF50' : '#FF0000' }"
+                                                        style="font-size: 1.2em; margin-left: 5px; font-weight: bold;"
+                                                        :title="latestStatusMap[loc.name] ? '점검 완료 (오늘)' : '점검 미완료'">●</span>
+                                                    <span v-else-if="loc.type === '변전소'" class="status-dot"
+                                                        style="color: #FFC107; font-size: 1.2em; margin-left: 5px; font-weight: bold;"
+                                                        title="데이터 확인 중...">●</span>
+                                                </div>
+                                            </div>
+                                            <!-- 3열: 점검자 버튼들 (병합된 셀) -->
+                                            <div class="erp-batch-cell workers-group-cell">
+                                                <div class="erp-btn" v-for="w in workers" :key="w.id"
+                                                    :class="{ 'selected': isWorkerSelected(loc.name, w.id) }"
+                                                    :disabled="!isRowActive(loc.name) || null"
+                                                    @click="toggleWorker(loc.name, w.id)">
+                                                    {{ w.name }}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Fixed Footer -->
+                <div class="view-footer">
+                    <div class="action-footer">
+                        <div class="worker-format-toggle-container">
+                            <span class="toggle-label-text" id="lbl-format-summary">대표자 외 0명</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggle-worker-format" class="savable-ui"
+                                    data-save-key="workerFormat" onchange="updateToggleStyle()">
+                                <span class="slider round"></span>
+                            </label>
+                            <span class="toggle-label-text" id="lbl-format-list">전원 나열식</span>
+                        </div>
+                        <div class="erp-action-buttons">
+                            <button class="secondary-btn" id="btn-erp-mode" onclick="toggleERPMode()">일괄모드 &gt;</button>
+                            <button class="primary-btn large-btn" onclick="openERPHandler()">시작</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Track Access View -->
+            <div id="view-track-access" class="view-section">
+                <div class="view-header">
+                    <div class="header-row">
+                        <h1>선로출입관리</h1>
+                        <div class="preset-controls">
+                            <select id="track-preset-sel" class="preset-select" onchange="loadTrackPreset()"
+                                ondblclick="renameTrackPreset()">
+                                <!-- Options will be populated by JS, including 'New Preset' -->
+                            </select>
+                            <button class="secondary-btn small" onclick="saveTrackPreset()">저장</button>
+                            <button class="danger-btn small" onclick="deleteTrackPreset()">삭제</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="view-content">
+                    <div class="input-grid g-2">
+                        <!-- Left Column -->
+                        <div class="grid-col">
+                            <div class="form-group">
+                                <label>작업구분</label>
+                                <select id="ta-work-type">
+                                    <option value="1">선로일시 사용중지</option>
+                                    <option value="2">본선-철도장비운행</option>
+                                    <option value="3">본선-역 출입 작업</option>
+                                    <option value="4">기지내-철도장비운행</option>
+                                    <option value="5">기지내-작업</option>
+                                    <option value="6">본선-철도장비점검</option>
+                                    <option value="7">선로순회점검</option>
+                                    <option value="8">긴급점검</option>
+                                    <option value="9">본선-전동차운행</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>작업내역</label>
+                                <input type="text" id="ta-work-content">
+                            </div>
+                            <div class="form-group">
+                                <label>작업구간 (From ~ To)</label>
+                                <div class="pair-input">
+                                    <input type="text" id="ta-work-from" placeholder="From">
+                                    <span class="tilde">~</span>
+                                    <input type="text" id="ta-work-to" placeholder="To">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>운전원</label>
+                                <div class="pair-input">
+                                    <input type="text" id="ta-driver-name" placeholder="이름">
+                                    <input type="text" id="ta-driver-phone" placeholder="연락처">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>작업자</label>
+                                <div class="pair-input">
+                                    <input type="text" id="ta-worker-name" placeholder="이름">
+                                    <input type="text" id="ta-worker-phone" placeholder="연락처">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>철도운행안전관리자</label>
+                                <div class="pair-input">
+                                    <input type="text" id="ta-safety-name" placeholder="이름">
+                                    <input type="text" id="ta-safety-phone" placeholder="연락처">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>감독자</label>
+                                <div class="pair-input">
+                                    <input type="text" id="ta-supervisor-name" placeholder="이름">
+                                    <input type="text" id="ta-supervisor-id" maxlength="6"
+                                        oninput="this.value=this.value.replace(/[^0-9]/g,'');" placeholder="사번">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right Column -->
+                        <div class="grid-col">
+                            <div class="form-group">
+                                <label>작업시간 (시작 ~ 종료)</label>
+                                <div class="pair-input">
+                                    <input type="text" id="ta-work-start" placeholder="HH:mm">
+                                    <span class="tilde">~</span>
+                                    <input type="text" id="ta-work-end" placeholder="HH:mm">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>운행시간 (시작 ~ 종료)</label>
+                                <div class="pair-input">
+                                    <input type="text" id="ta-op-start" placeholder="HH:mm">
+                                    <span class="tilde">~</span>
+                                    <input type="text" id="ta-op-end" placeholder="HH:mm">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>호선</label>
+                                <select id="ta-line">
+                                    <option value="1">1호선</option>
+                                    <option value="2">2호선</option>
+                                    <option value="3">3호선</option>
+                                    <option value="4">4호선</option>
+                                    <option value="5">노포차량기지</option>
+                                    <option value="6">신평차량기지</option>
+                                    <option value="7">호포차량기지</option>
+                                    <option value="8">대저차량기지</option>
+                                    <option value="9">안평차량기지</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>선로구분</label>
+                                <select id="ta-track-type">
+                                    <option value="1">일반</option>
+                                    <option value="2">하행선</option>
+                                    <option value="3">하행유치선</option>
+                                    <option value="4">하행모터카선</option>
+                                    <option value="5">상하행선</option>
+                                    <option value="6">하행건넘선</option>
+                                    <option value="7">4호선 회차선(상행)</option>
+                                    <option value="8">4호선 회차선(하행)</option>
+                                    <option value="9">반복선</option>
+                                    <option value="10">상행반복운전선(호포Only)</option>
+                                    <option value="11">하행반복운전선(호포Only)</option>
+                                    <option value="12">상행선</option>
+                                    <option value="13">상행유치선</option>
+                                    <option value="14">상행모터카선</option>
+                                    <option value="15">상행건넘선</option>
+                                    <option value="16">Y형 유치선</option>
+                                    <option value="17">안전측선</option>
+                                    <option value="18">반입선</option>
+                                    <option value="19">측선(기지구내)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>선로차단여부</label>
+                                <select id="ta-track-cutoff">
+                                    <option value="N">N</option>
+                                    <option value="Y">Y</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>철도운행협의서 No.</label>
+                                <input type="text" id="ta-agreement-no" placeholder="번호 입력">
+                            </div>
+                            <div class="sub-group">
+                                <label class="sub-label">총원 (인원 구성)</label>
+                                <div class="pair-input">
+                                    <input type="number" id="ta-total-count" placeholder="0">
+                                    <div class="read-only-text" id="ta-others-text">명</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="view-footer">
+                    <div class="action-footer" style="display:flex; justify-content:space-between; align-items:center;">
+                        <div style="margin-right: auto;">
+                            <label class="checkbox-label" style="display:flex; align-items:center; gap:8px;">
+                                <span style="font-size:13px; color:#666;">출입역 입력 : </span>
+                                <input type="checkbox" id="ta-station-input">
+                                <span style="font-size:13px; color:#666;">작업역 구간과 동일</span>
+                            </label>
+                        </div>
+                        <button class="primary-btn large-btn" onclick="runTrackAccessTask()">시작</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Vehicle Log View -->
+            <div id="view-vehicle-log" class="view-section">
+                <div class="view-header">
+                    <div class="header-row">
+                        <h1>차량운행일지</h1>
+                        <div class="preset-controls">
+                            <select id="vehicle-preset-sel" class="preset-select" onchange="loadVehiclePreset()"
+                                ondblclick="renameVehiclePreset()">
+                            </select>
+                            <button class="secondary-btn small" onclick="saveVehiclePreset()">저장</button>
+                            <button class="danger-btn small" onclick="deleteVehiclePreset()">삭제</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="view-content">
+                    <div class="input-grid g-2">
+                        <!-- Left Column -->
+                        <div class="grid-col">
+                            <div class="form-group">
+                                <label>운전자</label>
+                                <input type="text" id="vl-driver" placeholder="이름">
+                            </div>
+                            <div class="form-group">
+                                <label>작업구간 (시점 ~ 종점)</label>
+                                <div class="pair-input">
+                                    <input type="text" id="vl-point-1" placeholder="시점">
+                                    <span class="tilde">~</span>
+                                    <input type="text" id="vl-point-2" placeholder="종점">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>선로구분</label>
+                                <select id="vl-track-type">
+                                    <option value="상행선">상행선</option>
+                                    <option value="하행선">하행선</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>운행시간 (시작 ~ 종료)</label>
+                                <div class="pair-input">
+                                    <input type="text" id="vl-start-time" placeholder="HH:mm">
+                                    <span class="tilde">~</span>
+                                    <input type="text" id="vl-end-time" placeholder="HH:mm">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right Column -->
+                        <div class="grid-col">
+                            <div class="form-group">
+                                <label>승인정보</label>
+                                <div class="input-grid g-3" style="gap:5px;">
+                                    <input type="text" id="vl-approve-no" placeholder="승인번호">
+                                    <input type="text" id="vl-dept" placeholder="부서">
+                                    <input type="text" id="vl-approver" placeholder="승인자">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <button class="secondary-btn full-width" style="margin-top: 10px; height: 40px;"
+                                    onclick="runBringApproved()">승인정보 불러오기</button>
+                            </div>
+                            <div class="form-group">
+                                <label>가동시간</label>
+                                <input type="text" id="vl-run-time"
+                                    oninput="this.value=this.value.replace(/[^0-9]/g,'');">
+                            </div>
+                            <div class="form-group">
+                                <label>적산계</label>
+                                <input type="text" id="vl-distance"
+                                    oninput="this.value=this.value.replace(/[^0-9]/g,'');">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-group full-width-col">
+                        <label>내용</label>
+                        <input type="text" id="vl-content">
+                    </div>
+                    <div class="form-group full-width-col">
+                        <label>비고</label>
+                        <input type="text" id="vl-remarks">
+                    </div>
+                </div>
+                <div class="view-footer">
+                    <div class="action-footer" style="justify-content: flex-end;">
+                        <button class="primary-btn large-btn" onclick="runVehicleLogTask()">시작</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Settings Overlay View (Hidden Initially) -->
+    <div id="settings-view" style="display: none;">
+        <div class="settings-header">
+            <button class="back-btn" onclick="closeSettings()">
+                <svg viewBox="0 0 24 24" width="24" height="24">
+                    <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" fill="currentColor" />
+                </svg>
+                <span class="settings-title">설정</span>
+            </button>
+        </div>
+
+        <div class="settings-body">
+            <!-- Settings Tabs Sidebar -->
+            <div class="settings-sidebar">
+                <div class="tab-item active" onclick="switchSettingsTab('tab-user')">유저정보</div>
+                <div class="tab-item" onclick="switchSettingsTab('tab-preset')">일지프리셋</div>
+                <div class="tab-item" onclick="switchSettingsTab('tab-worker')">작업자</div>
+                <div class="tab-item" onclick="switchSettingsTab('tab-location')">작업장소</div>
+                <div class="tab-item" onclick="switchSettingsTab('tab-hotkey')">단축키</div>
+                <div class="tab-item" onclick="switchSettingsTab('tab-updates')">업데이트 내역</div>
+            </div>
+
+            <div class="settings-content-area">
+
+                <!-- Tab 1: User Info -->
+                <div id="tab-user" class="settings-tab-pane active">
+                    <h2>내 정보</h2>
+                    <div class="std-form-row"><label class="std-label fixed-70">이름</label><input type="text"
+                            id="user-name" class="std-input" readonly disabled></div>
+                    <div class="std-form-row"><label class="std-label fixed-70">사번</label><input type="text"
+                            id="user-id" class="std-input" readonly disabled></div>
+                    <div class="std-form-row"><label class="std-label fixed-70">분소</label>
+                        <select id="user-dept" class="std-input">
+                            <option value="5111">동래변전분소</option>
+                            <option value="5112">전포변전분소</option>
+                            <option value="5113">구포변전분소</option>
+                            <option value="5121">신평전기분소</option>
+                            <option value="5122">부산진전기분소</option>
+                            <option value="5123">동래전기분소</option>
+                            <option value="5124">노포전기분소</option>
+                            <option value="5125">장산전기분소</option>
+                            <option value="5126">광안전기분소</option>
+                            <option value="5127">전포전기분소</option>
+                            <option value="5128">구명전기분소</option>
+                            <option value="5129">호포전기분소</option>
+                            <option value="5130">미남전기분소</option>
+                            <option value="5131">대저전기분소</option>
+                            <option value="5132">다대전기관리소</option>
+                            <option value="5133">남양산전기관리소</option>
+                        </select>
+                    </div>
+                    <div class="std-form-row"><label class="std-label fixed-70">근무조</label>
+                        <select id="user-team" class="std-input">
+                            <option>A조</option>
+                            <option>B조</option>
+                            <option>C조</option>
+                            <option>D조</option>
+                            <option>일근</option>
+                        </select>
+                    </div>
+                    <hr>
+                    <h3>비밀번호 관리</h3>
+                    <div class="std-form-row"><label class="std-label fixed-70">통합 PW</label><input type="password"
+                            id="user-webpw" class="std-input">
+                    </div>
+                    <div class="std-form-row"><label class="std-label fixed-70">2차 PW</label><input type="password"
+                            id="user-pw2" class="std-input" maxlength="6"></div>
+                    <div class="std-form-row"><label class="std-label fixed-70">SAP PW</label><input type="password"
+                            id="user-sappw" class="std-input">
+                    </div>
+                </div>
+
+                <!-- Tab 2: Workers -->
+                <div id="tab-worker" class="settings-tab-pane">
+                    <div class="tab-header">
+                        <h2>분소원</h2>
+                        <!-- Headless Import Button -->
+                        <button id="btn-import-workers" class="secondary-btn small"
+                            onclick="importWorkersFromHeadless()" disabled style="margin-right: 10px;">불러오기</button>
+                    </div>
+                    <div class="table-wrapper">
+                        <table id="worker-table">
+                            <thead>
+                                <tr>
+                                    <th width="15%">이름</th>
+                                    <th width="15%">사번</th>
+                                    <th width="15%">근무조</th>
+                                    <th width="20%">전화번호</th>
+                                    <th width="10%">분소장</th>
+                                    <th width="15%">운전원</th>
+                                    <th width="10%">삭제</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <button class="add-row-btn" onclick="addWorkerRow()">+ 추가</button>
+                </div>
+
+                <!-- Tab 3: Locations -->
+                <div id="tab-location" class="settings-tab-pane">
+                    <div class="tab-header" style="display:flex; justify-content:space-between; align-items:center;">
+                        <h2>ERP점검</h2>
+                        <div style="font-size:14px; display: flex; align-items: center; white-space: nowrap;">
+                            <label style="margin-right:5px;">점검자 표시형식 : </label>
+                            <select id="erp-format-pref" style="padding:2px;">
+                                <option value="summary">대표자 외 N명</option>
+                                <option value="list">전원 나열식</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="table-wrapper">
+                        <table id="location-table">
+                            <thead>
+                                <tr>
+                                    <th width="40%">점검장소</th>
+                                    <th width="20%">오더번호</th>
+                                    <th width="30%">구분</th>
+                                    <th width="10%">삭제</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <button class="add-row-btn" onclick="addLocationRow()">+ 추가</button>
+                </div>
+
+                <!-- Tab 4: Hotkeys -->
+                <div id="tab-hotkey" class="settings-tab-pane">
+                    <h2>단축키 설정</h2>
+                    <div class="table-wrapper">
+                        <table id="hotkey-table">
+                            <thead>
+                                <tr>
+                                    <th width="30%">기능</th>
+                                    <th width="25%">단축키</th>
+                                    <th width="35%">설명</th>
+                                    <th width="10%" class="center">활성</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Tab 5: Presets -->
+                <!-- Tab 5: Presets (Daily Log Defaults) -->
+                <div id="tab-preset" class="settings-tab-pane">
+                    <h2>일지 프리셋 (기본값 설정)</h2>
+
+                    <!-- 1. Safety Management (4 Sets) -->
+                    <div class="preset-section">
+                        <h3>안전관리 (업무일지 기본값)</h3>
+                        <!-- Set 1: Day Morning -->
+                        <div class="std-form-row safety-set">
+                            <label class="std-label">주간 오전</label>
+                            <div class="safety-inputs">
+                                <input type="text" id="fps-safe1-content" placeholder="내용" class="std-input">
+                                <label class="std-label">시작</label>
+                                <input type="text" id="fps-safe1-start" placeholder="   :   "
+                                    class="std-input time-input" maxlength="5" oninput="formatTime(this)">
+                                <label class="std-label">종료</label>
+                                <input type="text" id="fps-safe1-end" placeholder="   :   " class="std-input time-input"
+                                    maxlength="5" oninput="formatTime(this)">
+                            </div>
+                        </div>
+                        <!-- Set 2: Day Afternoon -->
+                        <div class="std-form-row safety-set">
+                            <label class="std-label">주간 오후</label>
+                            <div class="safety-inputs">
+                                <input type="text" id="fps-safe2-content" placeholder="내용" class="std-input">
+                                <label class="std-label">시작</label>
+                                <input type="text" id="fps-safe2-start" placeholder="   :   "
+                                    class="std-input time-input" maxlength="5" oninput="formatTime(this)">
+                                <label class="std-label">종료</label>
+                                <input type="text" id="fps-safe2-end" placeholder="   :   " class="std-input time-input"
+                                    maxlength="5" oninput="formatTime(this)">
+                            </div>
+                        </div>
+                        <!-- Set 3: Night Evening -->
+                        <div class="std-form-row safety-set">
+                            <label class="std-label">야간 저녁</label>
+                            <div class="safety-inputs">
+                                <input type="text" id="fps-safe3-content" placeholder="내용" class="std-input">
+                                <label class="std-label">시작</label>
+                                <input type="text" id="fps-safe3-start" placeholder="   :   "
+                                    class="std-input time-input" maxlength="5" oninput="formatTime(this)">
+                                <label class="std-label">종료</label>
+                                <input type="text" id="fps-safe3-end" placeholder="   :   " class="std-input time-input"
+                                    maxlength="5" oninput="formatTime(this)">
+                            </div>
+                        </div>
+                        <!-- Set 4: Night Dawn -->
+                        <div class="std-form-row safety-set">
+                            <label class="std-label">야간 새벽</label>
+                            <div class="safety-inputs">
+                                <input type="text" id="fps-safe4-content" placeholder="내용" class="std-input">
+                                <label class="std-label">시작</label>
+                                <input type="text" id="fps-safe4-start" placeholder="   :   "
+                                    class="std-input time-input" maxlength="5" oninput="formatTime(this)">
+                                <label class="std-label">종료</label>
+                                <input type="text" id="fps-safe4-end" placeholder="   :   " class="std-input time-input"
+                                    maxlength="5" oninput="formatTime(this)">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 2. Driver Fitness Check -->
+                    <div class="preset-section">
+                        <h3>운전적합성 검사</h3>
+                        <div class="std-form-row" style="align-items: center;">
+                            <label class="std-label" style="width: auto; margin-right: 15px;">검사 방법 기본값</label>
+                            <div class="toggle-group">
+                                <span>운전원 제외한 최선임자</span>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="fps-driver-check-toggle" onchange="autoSaveSettings()">
+                                    <span class="slider round"></span>
+                                </label>
+                                <span>운전원 상호 검사</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 3. General Work -->
+                    <div class="preset-section">
+                        <h3>일반업무 (기본값)</h3>
+                        <div class="table-wrapper">
+                            <table id="general-work-table">
+                                <thead>
+                                    <tr>
+                                        <!-- 근무: 주간/야간/공통 -->
+                                        <th width="10%">근무</th>
+                                        <!-- 분류: 일상/특별 등 -->
+                                        <th width="15%">분류</th>
+                                        <th width="35%">내용</th>
+                                        <th width="15%">책임자</th> <!-- 사번/이름 저장 -->
+                                        <th width="10%">시작</th>
+                                        <th width="10%">종료</th>
+                                        <th width="5%">삭제</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                        <button class="add-row-btn" onclick="addGeneralWorkRow()">+ 추가</button>
+                    </div>
+
+                    <!-- 4. Auto Input Reservation -->
+                    <div class="preset-section">
+                        <h3>열차순회 자동입력 예약</h3>
+                        <div class="std-form-row">
+                            <label class="std-label">자동입력 시간</label>
+                            <input type="text" id="fps-auto-input-time" placeholder="HH:mm" class="std-input time-input"
+                                maxlength="5" oninput="formatTime(this)" style="width: 100px;">
+                            <span style="font-size: 0.9em; color: #666; margin-left: 10px;">(설정된 시간에 '열차순회' 항목 자동
+                                생성)</span>
+                        </div>
+                    </div>
+
+                    <!-- 5. Safety Education -->
+                    <div class="preset-section">
+                        <h3>안전교육 (요일별 자동 입력)</h3>
+                        <div class="std-form-row">
+                            <label class="std-label">요일 선택</label>
+                            <select id="fps-safe-edu-day" class="std-input" style="width: 120px;"
+                                onchange="handleSafetyEduDayChange()">
+                                <option value="Mon">월요일</option>
+                                <option value="Tue">화요일</option>
+                                <option value="Wed">수요일</option>
+                                <option value="Thu">목요일</option>
+                                <option value="Fri">금요일</option>
+                                <option value="Sat">토요일</option>
+                                <option value="Sun">일요일</option>
+                            </select>
+                        </div>
+                        <div class="std-form-row">
+                            <label class="std-label">교육 내용</label>
+                            <textarea id="fps-safe-edu-content" class="std-input full-width-input" rows="3"
+                                placeholder="해당 요일에 자동 입력될 안전교육 내용" oninput="saveSafetyEduContent()"></textarea>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- Tab 6: Updates -->
+                <div id="tab-updates" class="settings-tab-pane">
+                    <h2>업데이트 내역</h2>
+                    <div id="release-list">
+                        <!-- Populated by JS -->
+                        <div class="loading-spinner">불러오는 중...</div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+    <!-- ERP Worker Selection Modal -->
+    <div id="erp-worker-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>점검자 선택</h3>
+                <button class="close-btn-icon" onclick="closeERPWorkerModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="erp-worker-list" class="worker-list-grid">
+                    <!-- Dynamic Content -->
+                </div>
+                <div class="modal-option-row">
+                    <span>점검자 표시형식</span>
+                    <button id="btn-erp-modal-toggle" class="text-toggle-btn" onclick="toggleModalWorkerFormat()">
+                        대표자 외 0명
+                    </button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="primary-btn full-width" onclick="submitERPTask()">확인</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ERP Batch Confirmation Modal (Vue Managed) -->
+    <div id="erp-batch-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>ERP 일괄모드</h3>
+                <button class="close-btn-icon" @click="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="batch-confirm-list">
+                    <div v-for="item in batchPreviewList" :key="item.locName" class="batch-confirm-item">
+                        <span class="batch-confirm-loc">{{ item.locName }} </span>
+                        <span class="batch-confirm-dash">-</span>
+                        <span class="batch-confirm-workers"> {{ item.workersText }}</span>
+                    </div>
+                </div>
+                <!-- 하단 포맷 토글 스위치는 개별 모드와 시각적으로 동일하게 구성 -->
+                <div class="modal-option-row">
+                    <span>점검자 표시형식</span>
+                    <button class="text-toggle-btn" @click="toggleFormat()">
+                        {{ isListFormat ? '전원 나열식' : '대표자 외 ' + (previewMaxCount > 0 ? previewMaxCount : 0) + '명' }}
+                    </button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="primary-btn full-width" @click="submitBatchTask()">시작</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

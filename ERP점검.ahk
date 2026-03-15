@@ -11,7 +11,7 @@ class ERP점검 {
     ; --------------------------------------------------------------------------
     ; Entry Point
     ; --------------------------------------------------------------------------
-    static Start(msg) {
+    static Start(msg, batchmode) {
 
         location := msg.Has("location") ? msg["location"] : ""
         members := msg.Has("members") ? msg["members"] : []
@@ -23,12 +23,12 @@ class ERP점검 {
 
         if (userPW == "") {
             MsgBox("SAP PW 지정되지 않아 실행할 수 없습니다", "오류", "iconx")
-            return
+            return false
         }
 
         if (location == "") {
             MsgBox("예외 발생 : 장소 미지정", "오류", "iconx")
-            return
+            return false
         }
 
         ; 1. 멤버 문자열 조합
@@ -43,56 +43,58 @@ class ERP점검 {
             }
         } else {
             MsgBox("예외 발생 : 작업자 미지정", "오류", "iconx")
-            return
+            return false
         }
 
-        ; 2. 점검 시작 (폴링 상태 기반 분기)
+        ; 2. 점검 시작
         isSubstation := (targetType == "변전소")
         isWebMode := false
 
-        if (isSubstation) {
-            if (this.ValidLocations.Has(location)) {
-                ; [GREEN] WEB 연동 가능
-                isWebMode := true
-                if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . location . " (WEB앱 연동)`n점검자 : " . memberStr,
-                    "진행합니다", "0x1 Iconi") != "OK") {
-                    return
+        if !batchMode {
+            if (isSubstation) {
+                if (this.ValidLocations.Has(location)) {
+                    ; [GREEN] WEB 연동 가능
+                    isWebMode := true
+                    if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . location . " (WEB앱 연동)`n점검자 : " . memberStr,
+                        "진행합니다", "0x1 Iconi") != "OK") {
+                        return false
+                    }
+                    ; 비동기 다운로드 시작 (SAP 실행되는 동안 백그라운드 다운로드)
+                    this.DownSheetAsync(location)
+                } else {
+                    ; [RED] WEB 연동 불가 (또는 아직 작성 안됨) -> 수동 모드
+                    if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . location . " (엑셀 수동입력)`n점검자 : " . memberStr,
+                        "진행합니다", "0x1 Icon!") != "OK") {
+                        return false
+                    }
+                    ; 로컬 엑셀 열기 (사용자가 확인/수정 후 종료하면 계속 진행)
+                    this.OpenLocalExcel(location)
                 }
-                ; 비동기 다운로드 시작 (SAP 실행되는 동안 백그라운드 다운로드)
-                this.DownSheetAsync(location)
             } else {
-                ; [RED] WEB 연동 불가 (또는 아직 작성 안됨) -> 수동 모드
-                if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . location . " (엑셀 수동입력)`n점검자 : " . memberStr,
-                    "진행합니다", "0x1 Icon!") != "OK") {
-                    return
+                ; 변전소 외 (전기실 등)
+                if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . location . "`n점검자 : " . memberStr,
+                    "진행합니다", "0x1 Iconi") != "OK") {
+                    return false
                 }
-                ; 로컬 엑셀 열기 (사용자가 확인/수정 후 종료하면 계속 진행)
-                this.OpenLocalExcel(location)
             }
-        } else {
-            ; 변전소 외 (전기실 등)
-            if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . location . "`n점검자 : " . memberStr,
-                "진행합니다", "0x1 Iconi") != "OK") {
-                return
+        }
+        ;일괄모드 시
+        else {
+            if isSubstation {
+                if this.ValidLocations.Has(location) {
+                    isWebMode := true
+                    this.DownSheetAsync(location)
+                }
+                else {
+                    MsgBox "웹앱에 " location "의 데이터가 저장되어있지 않습니다.`n ERP 작업보고 일괄모드를 중단합니다.", "진행불가", "0x1 Icon!"
+                    return false
+                }
             }
         }
 
         ; 3. SAP 자동 입력 실행
         ; isWebMode 플래그는 여기서 딱히 필요 없지만(파일 날짜로 체크하므로), 로직 흐름상 명확히 함
-        this.Macro(memberStr, location, userID, userPW, targetType, targetOrder)
-    }
-
-    ; --------------------------------------------------------------------------
-    ; Web / Excel Logic
-    ; --------------------------------------------------------------------------
-
-    ; --------------------------------------------------------------------------
-    ; Pre-Check Logic (Added for V3)
-    ; --------------------------------------------------------------------------
-    static PreCheck(location) {
-        ; Start에서 폴링 상태를 기반으로 판단하므로,
-        ; 모달 진입 시점의 팝업(PreCheck)은 제거합니다.
-        return
+        return this.Macro(memberStr, location, userID, userPW, targetType, targetOrder, batchMode)
     }
 
     ; --------------------------------------------------------------------------
@@ -220,7 +222,7 @@ class ERP점검 {
     ; --------------------------------------------------------------------------
     ; SAP Automation Logic
     ; --------------------------------------------------------------------------
-    static Macro(member, ss, uID, uPW, targetType, targetOrder) {
+    static Macro(member, ss, uID, uPW, targetType, targetOrder, batchMode) {
 
         chk1 := true
         chk2 := true
@@ -231,7 +233,7 @@ class ERP점검 {
             Run("작업보고.sap")
         } catch {
             MsgBox("작업보고.sap 실행 파일을 찾을 수 없습니다.", "오류", "iconx")
-            return
+            return false
         }
 
         loop 150 { ; SAP 진입 대기 (약 15초)
@@ -284,7 +286,7 @@ class ERP점검 {
                 orderNum := targetOrder
                 if (orderNum == "") {
                     MsgBox("해당 장소(" . ss . ")의 오더번호를 찾을 수 없습니다.`n설정을 확인해주세요.", "오류", "iconx")
-                    return
+                    return false
                 }
 
                 Send orderNum . "{Enter}"
@@ -293,7 +295,7 @@ class ERP점검 {
 
             if (A_Index == 150) {
                 MsgBox("시간초과: SAP 실행 실패", "오류", "iconx")
-                return
+                return false
             }
         }
 
@@ -369,7 +371,7 @@ class ERP점검 {
             }
             else {
                 MsgBox("시간초과로 종료합니다 - 불러오기 실패", "타임아웃", "iconx")
-                ExitApp
+                return false
             }
 
             ;입력확인
@@ -398,16 +400,20 @@ class ERP점검 {
                 send "{end}"
                 if A_Index > 40 {
                     MsgBox("시간초과로 종료합니다 - 측정값 입력 실패", "타임아웃", "iconx")
-                    ExitApp
+                    return false
                 }
 
             }
             CoordMode "Pixel", "Client"
         }
 
-        MsgBox("입력이 완료되었습니다.`nERP 화면을 확인 후 저장하시기 바랍니다.", "완료", "iconi")
-
-        return
+        if !batchMode
+            MsgBox("입력이 완료되었습니다.`nERP 화면을 확인 후 저장하시기 바랍니다.", "완료", "iconi")
+        else {
+            send "^s"
+            WinWait "SAP Easy Access  -  사용자 메뉴"
+        }
+        return true
     }
     ; --------------------------------------------------------------------------
     ; Polling Logic
@@ -416,8 +422,8 @@ class ERP점검 {
     static IsPolling := false
 
     static StartPolling() {
-        ; 1분마다 상태 갱신 요청
-        SetTimer () => ERP점검.RequestStatus(), 60000
+        ; 5분마다 상태 갱신 요청
+        SetTimer () => ERP점검.RequestStatus(), 300000
         ; 시작 시 즉시 1회 실행
         ERP점검.RequestStatus()
     }
@@ -580,7 +586,7 @@ GetCaretPos(&X, &Y, &W, &H) {
         	but in reality is not. The only downside to using GetSelections is that when text
         	is selected then caret position is ambiguous. Nevertheless, in those cases it most
         	likely doesn't matter much whether the caret is in the beginning or end of the selection.
-        
+
         	If GetCaretRange is needed then the following code implements that:
         	ComCall(16, FocusedEl, "int", 10024, "ptr*", &patternObject:=0), ObjRelease(FocusedEl) ; GetCurrentPattern. TextPattern2 = 10024
         	if patternObject {

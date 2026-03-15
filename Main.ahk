@@ -878,7 +878,22 @@ RunTaskAsync(taskName, msg) {
     ; 2. ERP 점검 (변전소/전기실 등)
     else if (taskName == "ERPCheck") {
 
-        ERP점검.Start(msg)
+        ;일괄모드 시
+        if msg.Has("batchmode") ? msg["batchmode"] : "" {
+
+            ;점검장소 마다 매크로 실행
+            loop msg["location"].Length { ;{{msg내 점검장소 map객체 배열의 길이}}
+                ERP점검.Start(msg["location"][A_Index])   ;점검잠소별 map객체를 msg로 전송
+
+                ;점검장소별 이름 누적
+                locationMsg .= msg["location"][A_Index]["location"] ", "
+            }
+
+            MsgBox("ERP 일괄 입력이 완료되었습니다.`n" locationMsg, "완료", "iconi")
+        }
+        else
+            ERP점검.Start(msg)
+
 
         EndMacro()
     }

@@ -878,22 +878,35 @@ RunTaskAsync(taskName, msg) {
     ; 2. ERP 점검 (변전소/전기실 등)
     else if (taskName == "ERPCheck") {
 
-        ;일괄모드 시
-        if msg.Has("batchmode") ? msg["batchmode"] : "" {
+        ; 일괄모드 시
+        if msg.Has("batchmode") ? msg["batchmode"] : false {
+            locationMsg := ""
 
-            ;점검장소 마다 매크로 실행
-            loop msg["location"].Length { ;{{msg내 점검장소 map객체 배열의 길이}}
-                ERP점검.Start(msg["location"][A_Index])   ;점검잠소별 map객체를 msg로 전송
+            ; 점검장소마다 매크로 실행
+            loop msg["location"].Length {
+                batchItem := msg["location"][A_Index]
 
-                ;점검장소별 이름 누적
-                locationMsg .= msg["location"][A_Index]["location"] ", "
+                ; 개별 모드와 동일한 규격으로 임시 객체 생성하여 전달
+                singleMsg := msg.Clone()
+                singleMsg["location"] := batchItem["location"]
+                singleMsg["targetType"] := batchItem["targetType"]
+                singleMsg["targetOrder"] := batchItem["targetOrder"]
+                singleMsg["members"] := batchItem["members"]
+
+                ; ERP 점검 클래스의 개별 실행 함수 호출
+                ERP점검.Start(singleMsg, true)
+
+                ; 결과 메시지 누적
+                locationMsg .= batchItem["location"] ", "
             }
 
-            MsgBox("ERP 일괄 입력이 완료되었습니다.`n" locationMsg, "완료", "iconi")
+            ; 마지막 쉼표 제거
+            locationMsg := RTrim(locationMsg, ", ")
+            MsgBox("ERP 일괄 입력이 완료되었습니다.`n[진행 장소: " locationMsg "]", "완료", "iconi")
         }
-        else
-            ERP점검.Start(msg)
-
+        else {
+            ERP점검.Start(msg, false)
+        }
 
         EndMacro()
     }

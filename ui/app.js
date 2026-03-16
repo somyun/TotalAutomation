@@ -1721,15 +1721,43 @@ function initERPBatchModalApp() {
             },
             submitBatchTask() {
                 // Return structured Array of tasks mapping to original runTask
+                const format = this.isListFormat ? 'list' : 'summary';
+
                 const formattedBatchData = this.batchDataRaw.map((item, index) => {
+                    // targetType, targetOrder 속성 찾기 (appConfig.appSettings.locations 활용)
+                    let locType = "";
+                    let locOrder = "";
+                    if (appConfig && appConfig.appSettings && appConfig.appSettings.locations) {
+                        const locObj = appConfig.appSettings.locations.find(l => l.name === item.location);
+                        if (locObj) {
+                            locType = locObj.type || "";
+                            locOrder = locObj.order || "";
+                        }
+                    }
+
+                    // members 배열 완성 (id를 기반으로 실제 이름 찾기)
+                    const workerNames = [];
+                    item.workerIds.forEach(id => {
+                        const w = erpBatchAppInstance.workers.find(wk => wk.id === id);
+                        if (w) workerNames.push(w.name);
+                    });
+
                     return {
                         location: item.location,
-                        workersStr: this.batchPreviewList[index].workersText,
-                        workerIds: item.workerIds // kept for legacy compat if needed
+                        workersStr: this.batchPreviewList[index].workersText, // 알림 메시지 팝업에서의 목록 표시용 보존
+                        targetType: locType,
+                        targetOrder: locOrder,
+                        members: workerNames
                     };
                 });
 
-                sendMessageToAHK({ command: 'runTask', task: 'ERPCheckBatch', batchData: formattedBatchData });
+                sendMessageToAHK({
+                    command: 'runTask',
+                    task: 'ERPCheck',
+                    batchmode: true,
+                    format: format,
+                    location: formattedBatchData
+                });
                 this.closeModal();
             }
         }

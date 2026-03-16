@@ -19,14 +19,14 @@
 ; ==============================================================================
 ; 컴파일러 지시문
 ; ==============================================================================
-;@Ahk2Exe-SetVersion 3.2.4.0
-;@Ahk2Exe-SetProductVersion v3.2.4
+;@Ahk2Exe-SetVersion 3.2.5.0
+;@Ahk2Exe-SetProductVersion v3.2.5
 ;@Ahk2Exe-SetDescription 통합자동화
 ; ==============================================================================
 ; ==============================================================================
 ; 초기화
 ; ==============================================================================
-global AppVersion := "v3.2.4"
+global AppVersion := "v3.2.5"
 global wvc := ""
 global wv := ""
 global MainGui := ""
@@ -52,7 +52,7 @@ CleanupLegacyFiles() {
         A_ScriptDir "\node",
         A_ScriptDir "\node_modules"
     ]
-    
+
     legacyFiles := [
         A_ScriptDir "\dist.zip",
         A_ScriptDir "\temp_node_pkg.zip"

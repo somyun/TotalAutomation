@@ -310,7 +310,8 @@ class UserInputGUI {
 class WebAutoLogin {
     static PortalURL := "https://btcep.humetro.busan.kr/portal"
     static ERP_PortalURL := "https://niw.humetro.busan.kr/erpep.jsp"
-    static Worklog_List := "http://ep.humetro.busan.kr/irj/portal?NavigationTarget=ROLES%3A%2F%2Fportal_content%2Fhumetro%2Frole%2Fmaintenance%2Frole.09%2Fworkset.07%2Fworkset.01%2Fworkset.03&sapDocumentRenderingMode=EmulateIE8"
+    static Worklog_List :=
+        "http://ep.humetro.busan.kr/irj/portal?NavigationTarget=ROLES%3A%2F%2Fportal_content%2Fhumetro%2Frole%2Fmaintenance%2Frole.09%2Fworkset.07%2Fworkset.01%2Fworkset.03&sapDocumentRenderingMode=EmulateIE8"
 
     ; ==============================================================================
     ; [메서드] EnsureReady
@@ -334,18 +335,8 @@ class WebAutoLogin {
             return this.LaunchXPlatformSession(user)
         }
         else if (taskType == "WorkLog_Create") {
-            ; I_MODE=REG (일지 생성) url
             try {
-                today := FormatTime(DateAdd(A_Now, -9, "Hours"), "yyyy-MM-dd")
-                url :=
-                    "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.erp.work_log.WorkLogReg"
-                    . "?I_MODE=REG&V_SABUN=" user["id"]
-                    . "&V_ARBPL01=" user["arbpl"]
-                    . "&I_ARWRK=5010"
-                    . "&I_GIJUNDF=" today
-                    . "&I_GIJUNDT=" today
-
-                return this.LaunchAppModeSession(url)
+                return this.LaunchLogSession(user, "reg", "general")
             } catch as e {
                 MsgBox("업무일지 생성 화면 이동 중 오류: " e.Message, "오류", "Iconx")
                 return false
@@ -353,23 +344,7 @@ class WebAutoLogin {
         }
         else if (taskType == "WorkLog_View") {
             try {
-                headless := HeadlessAutomation(true)
-                if (!user.Has("arbpl") || user["arbpl"] == "") {
-                    MsgBox("부서코드(arbpl)를 불러올 수 없습니다.`n(사번: " user["id"] ")")
-                    return false
-                }
-                iljino := headless.GetTodayWorkLogNumber(user["id"], user["arbpl"])
-
-                if (iljino == "") {
-                    MsgBox("형식에 맞는 오늘자 일지 번호를 찾을 수 없습니다.`n(부서코드: " user["arbpl"] ")")
-                    return false
-                }
-
-                url :=
-                    "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.erp.work_log.WorkLogReg"
-                    . "?I_MODE=MOD&V_ILJINO=" iljino "&V_SABUN=" user["id"]
-
-                return this.LaunchAppModeSession(url)
+                return this.LaunchLogSession(user, "mod", "general")
             } catch as e {
                 MsgBox("업무일지 조회 화면 이동 중 오류: " e.Message, "오류", "Iconx")
                 return false
@@ -380,28 +355,65 @@ class WebAutoLogin {
     }
 
     ; ==============================================================================
-    ; [메서드] LaunchAppModeSession
-    ; 설명: 쿠키 주입 후 Edge 브라우저를 앱 모드로 실행하여 UIA_Browser 객체를 반환합니다.
+    ; [메서드] LaunchLogSession
+    ; 설명: 쿠키 주입 후 Edge 브라우저를 실행하여 일지 작성/조회 창을 엽니다.
     ; ==============================================================================
-    static LaunchAppModeSession(targetUrl) {
+    static LaunchLogSession(user, mode := "mod", browserMode := "general") {
+        ; url 준비
+        targetUrl := ""
+        iljino := ""
+
+        if (mode == "mod") {
+            headless := HeadlessAutomation(true)
+            if (!user.Has("arbpl") || user["arbpl"] == "") {
+                MsgBox("부서코드(arbpl)를 불러올 수 없습니다.`n(사번: " user["id"] ")")
+                return false
+            }
+            iljino := headless.GetTodayWorkLogNumber(user["id"], user["arbpl"])
+
+            if (iljino == "") {
+                MsgBox("형식에 맞는 오늘자 일지 번호를 찾을 수 없습니다.`n(부서코드: " user["arbpl"] ")")
+                return false
+            }
+
+            targetUrl :=
+                "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.erp.work_log.WorkLogReg"
+                . "?I_MODE=MOD&V_ILJINO=" iljino "&V_SABUN=" user["id"]
+        } else if (mode == "reg") {
+            today := FormatTime(DateAdd(A_Now, -9, "Hours"), "yyyy-MM-dd")
+            targetUrl :=
+                "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.erp.work_log.WorkLogReg"
+                . "?I_MODE=REG&V_SABUN=" user["id"]
+                . "&V_ARBPL01=" user["arbpl"]
+                . "&I_ARWRK=5010"
+                . "&I_GIJUNDF=" today
+                . "&I_GIJUNDT=" today
+        } else {
+            return false
+        }
+
+        ; 브라우저 인자 조립
         edgePath := "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
         profile := A_Temp "\edge_cookie_profile" A_TickCount
 
-        args := ' "data:text/html;charset=utf-8,Loading..."'
-            . ' --remote-debugging-port=9222 --user-data-dir="' profile '"'
+        args := ' --remote-debugging-port=9222 --user-data-dir="' profile '"'
             . ' --no-first-run --no-default-browser-check --disable-default-apps'
 
+        if (browserMode == "app") {
+            args .= ' "data:text/html;charset=utf-8,Loading..."'
+        } else {
+            args .= ' about:blank'
+        }
+
         try {
-            Run(Format('"{1}" {2}', edgePath, args), , , &edgePid)
+            Run(Format('"{1}" {2}', edgePath, args), , "max", &edgePid)
         } catch as e {
             MsgBox("브라우저 실행 실패: " e.Message, "오류", "Iconx")
             return false
         }
 
-        Sleep(1000)
-
-        ; Chrome 인스턴스 연결
         try {
+            ; Chrome 인스턴스 연결
             chromeInst := Chrome([], , , 9222)
             pages := chromeInst.GetPageList()
             foundData := ""
@@ -423,33 +435,59 @@ class WebAutoLogin {
                 page.Call("Network.enable")
                 page.Call("Network.setCookies", Map("cookies", cookieParams))
 
-                ; 2. URL 이동(Navigate) 대신 자바스크립트로 팝업창을 엽니다.
-                ; 여기서 width=1024, height=760과 함께 도구모음(toolbar, menubar)을 없앱니다.
-                js := Format(
-                    "window.open('{1}', '_blank', 'width=1024,height=760,menubar=no,toolbar=no,location=yes,status=yes,scrollbars=yes,resizable=yes');",
-                    targetUrl)
-                page.Evaluate(js)
+                if (browserMode == "app") {
+                    js := Format(
+                        "window.open('{1}', '_blank', 'width=1024,height=760,menubar=no,toolbar=no,location=yes,status=yes,scrollbars=yes,resizable=yes');",
+                        targetUrl)
+                    page.Evaluate(js)
+                    Sleep(500)
+                    page.Call("Page.close")
 
-                Sleep(500) ; 팝업이 뜰 시간을 잠시 줍니다.
+                } else {
+                    DirectURL :=
+                        "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fhumetro!2frole!2fmaintenance!2frole.09!2fworkset.07!2fworkset.01!2fworkset.03!2fiview.02?sapDocumentRenderingMode=EmulateIE8"
+                    page.Call("Page.navigate", Map("url", DirectURL))
 
-                ; 3. 팝업을 띄우기 위해 열렸던 원래의 빈 탭은 닫아줍니다.
-                page.Call("Page.close")
+                    modeCode := (mode == "mod") ? "MOD" : "REG"
+
+                    js := "let count = 0; "
+                        . "let inter = setInterval(() => { "
+                        . "    if (typeof $ !== 'undefined' && typeof fn_detail_open !== 'undefined') { "
+                        . "        clearInterval(inter); "
+
+                    ; 조회 모드일 때만 일지번호 세팅
+                    if (mode == "mod" && iljino != "")
+                        js .= "        $('#V_ILJINO').val('" iljino "'); "
+
+                    js .= "        $('#I_MODE').val('" modeCode "'); "
+                        .
+                        "        fn_detail_open('WorkLogForm', 'reg', 'kr.busan.humetro.cbo.erp.work_log.WorkLogReg', 'width=1024,height=760,scrollbars=yes,resizable=yes,status=yes'); "
+                        . "    } else if (count++ > 20) { "
+                        . "        clearInterval(inter); "
+                        . "    } "
+                        . "}, 500);"
+
+                    page.Evaluate(js)
+                }
             }
         } catch as e {
             MsgBox("브라우저 제어(쿠키/이동) 오류: " e.Message, "오류", "Iconx")
+            return false
         }
 
-        ; 4. 새로 열린 팝업창의 UIA 객체 획득
+        ; 열린 팝업창(일지 상세창)의 UIA 객체를 획득하여 반환
         try {
-            ; 팝업창 활성화 대기 (edgePid를 공유하므로 그대로 사용 가능)
-            WinWaitActive("ahk_pid " edgePid, , 5)
-            hwnd := WinExist("A") ; 최상단 액티브 창 핸들 가져오기
-
-            if (hwnd) {
-                return UIA_Browser("ahk_id " hwnd)
-            } else {
-                return false
+            ; JS(fn_detail_open) 실행 후 창이 2개(메인, 팝업)가 될 때까지 최대 15초 대기
+            loop 30 {
+                Sleep 100
+                hwnds := WinGetList("ahk_pid " edgePid)
+                if (hwnds.Length >= 2) {
+                    WinActivate("ahk_id " hwnds[1]) ; 팝업창 활성화 보장
+                    return UIA_Browser("ahk_id " hwnds[1])
+                }
             }
+            MsgBox("일지 상세창(팝업) 호출 시간 초과", "알림", "Iconx")
+            return false
         } catch as e {
             MsgBox("cUIA 연결 실패: " e.Message, "오류", "Iconx")
             return false

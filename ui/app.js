@@ -2270,17 +2270,6 @@ function openERPWorkerModal() {
         return;
     }
 
-    // [New Logic] Check Substation Type & Trigger Pre-Check
-    const uid = selectedUserId;
-    if (uid && appConfig.appSettings && appConfig.appSettings.locations) {
-        const locData = appConfig.appSettings.locations.find(l => l.name === selectedERPLocation);
-        if (locData && locData.type === '변전소') {
-            // Trigger AHK Pre-Check (Async/Blocking handled by AHK MsgBox)
-            sendMessageToAHK({ command: 'checkSubstation', location: selectedERPLocation });
-            // Note: If AHK shows a blocking MsgBox, the WebView might pause or waiting
-            // user interaction on the AHK side.
-        }
-    }
 
     const modal = document.getElementById('erp-worker-modal');
     modal.style.display = 'flex';

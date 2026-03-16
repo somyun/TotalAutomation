@@ -44,14 +44,42 @@ if (ConfigManager.NeedsPasswordReset) {
 }
 
 ; ==============================================================================
+; 구버전 찌꺼기 파일 정리 (블랙리스트 방식)
+; ==============================================================================
+CleanupLegacyFiles() {
+    legacyDirs := [
+        A_ScriptDir "\automation",
+        A_ScriptDir "\node",
+        A_ScriptDir "\node_modules"
+    ]
+    
+    legacyFiles := [
+        A_ScriptDir "\dist.zip",
+        A_ScriptDir "\temp_node_pkg.zip"
+    ]
+
+    for dir in legacyDirs {
+        if DirExist(dir)
+            try DirDelete(dir, true) ; true = 하위 파일까지 강제 삭제
+    }
+
+    for file in legacyFiles {
+        if FileExist(file)
+            try FileDelete(file)
+    }
+}
+CleanupLegacyFiles()
+
+; ==============================================================================
 ; [Self-Bootstrapping] 필수 파일 내장 및 추출
 ; ==============================================================================
 ; 설명: 컴파일된 Main.exe는 아래 파일들을 내장하고 있으며, 실행 시마다 최신 버전으로 덮어씁니다.
 ; 이를 통해 Main.exe만 배포해도 모든 구성요소가 자동으로 업데이트됩니다.
 if (A_IsCompiled) {
     try {
-        ; 1. 실행 파일 (updater.exe)
+        ; 1. 실행 파일 (updater.exe, 세션BG.exe)
         FileInstall("Updater.exe", A_ScriptDir "\Updater.exe", 1)
+        FileInstall("세션BG.exe", A_ScriptDir "\세션BG.exe", 1)
 
         ; 2. 라이브러리 (DLL)
         if !DirExist(A_ScriptDir "\Lib\64bit")
@@ -385,9 +413,6 @@ OnWebMessage(sender, args) {
 
                 ; 세션BG 실행 경로 설정
                 exePath := A_ScriptDir "\세션BG.exe"
-                ; FileInstall은 Main이 컴파일될 때 포함되도록 함
-                if A_IsCompiled and !FileExist(exePath)
-                    FileInstall("세션BG.exe", exePath, 1)
 
                 ; 기존 프로세스 정리
                 BackgroundProcessManager.Cleanup()
@@ -432,11 +457,6 @@ OnWebMessage(sender, args) {
         cfg := ConfigManager.Config
         payload := Map("type", "loadConfig", "data", cfg)
         wv.PostWebMessageAsJson(JSON.stringify(payload))
-    } else if (command == "checkSubstation") {
-        location := msg.Has("location") ? msg["location"] : ""
-        if (location != "") {
-            ERP점검.PreCheck(location)
-        }
     } else if (command == "msgbox") {
         text := msg.Has("text") ? msg["text"] : ""
         title := msg.Has("title") ? msg["title"] : "알림"

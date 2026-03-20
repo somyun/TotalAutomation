@@ -192,6 +192,39 @@ try {
     UpdateCookies(http.GetAllResponseHeaders())
     LogDebug("[Step 2] 환전 완료.")
 
+    /*
+    ; ==============================================================================
+    ; [Step 2.5] 메인포털 후속 절차
+    ; ==============================================================================
+    LogDebug("[Step 2.5-1] 메인포털 후속 절차 시도1...")
+    
+    ; 바구니 교체: btcep_cookies 사용
+    current_cookies := btcep_cookies
+    
+    http.Open("GET", "https://btcep.humetro.busan.kr/", false)
+    http.Option[6] := false
+    SetHeaders("DEFAULT", "https://btcep.humetro.busan.kr/", btcep_cookies)
+    
+    http.Send()
+    if (http.Status != 302) {
+        msgbox("뭔가 실패1 (Status: " http.Status ")")
+        ExitApp(1)
+    }
+    
+    LogDebug("[Step 2.5-2] 메인포털 후속 절차 시도2...")
+    
+    http.Open("GET", "https://btcep.humetro.busan.kr/portal", false)
+    SetHeaders("DEFAULT", "https://btcep.humetro.busan.kr/", btcep_cookies)
+    
+    http.Send()
+    if (http.Status != 200) {
+        msgbox("뭔가 실패2 (Status: " http.Status ")")
+        ExitApp(1)
+    }
+    
+    current_cookies := niw_cookies
+    http.Option[6] := true
+    */
     ; ==============================================================================
     ; [Step 3] ERP 포털 접속을 위한 준비
     ; ==============================================================================
@@ -454,9 +487,7 @@ try {
                 "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fhumetro!2frole!2fmaintenance!2frole.09!2fworkset.07!2fworkset.01!2fworkset.03!2fiview.02?sapDocumentRenderingMode=EmulateIE8"
             Page.Call("Page.navigate", Map("url", DirectURL))
 
-            LogDebug("[Step 9] [디버그 모드] 업무일지 페이지 호출 성공. 화면을 확인하세요.")
-
-            A_Clipboard := k_val
+            LogDebug("[Step 9] [디버그 모드] 업무일지 리스트 페이지 호출 성공. 화면을 확인하세요.")
 
             LogDebug("========== [디버그 모드] 세션BG 단독 테스트 완료 ==========")
             ExitApp ; 디버그 단독 실행 시 브라우저만 띄우고 종료

@@ -217,17 +217,11 @@ class ShortcutActions {
         ; 1. 브라우저 실행
         url := "https://btcep.humetro.busan.kr/portal/"
         edgePath := "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-        profile := A_Temp "\edge_cookie_profile"
-        runArgs := ' --remote-debugging-port=9222 --user-data-dir="' profile '"'
-    . ' --no-first-run --no-default-browser-check --disable-default-apps --new-window ' url
 
-        if FileExist(edgePath)
-            Run(Format('"{1}" {2}', edgePath, runArgs),,"max" ,&browser_pid)
-        else
-            Run(url)
+        Run(Format('"{1}" {2}', edgePath, url), , "max")
 
         ; 2. 쿠키 대기 (중복 로그인 방지: 세션BG 완료 시까지 대기)
-        loop 10 {
+        loop 16 {
             if (HeadlessAutomation.CookieStorage.Has("btcep")) {
                 cookie_btcep := HeadlessAutomation.CookieStorage["btcep"]
                 cookie_niw := HeadlessAutomation.CookieStorage["niw"]
@@ -235,7 +229,7 @@ class ShortcutActions {
                 if (InStr(cookie_btcep, "JSESSIONID") && InStr(cookie_niw, "K=") && InStr(cookie_niw, "key="))
                     break
             }
-            if A_Index == 10 {
+            if A_Index == 16 {
                 MsgBox "세션bg 쿠키 확보 확인 실패"
                 return
             }
@@ -246,8 +240,8 @@ class ShortcutActions {
         ; 3. UIA 로그인 진행
         loop 10 {
             try {
-                browser_hwnd := WinWait("ahk_pid " browser_pid "부산교통공사", , 3)
-                Loop 10 {
+                browser_hwnd := WinWait("부산교통공사", , 3)
+                loop 10 {
                     if InStr(WinGetTitle(browser_hwnd), ":: 부산교통공사 ::") {
                         MsgBox "이미로그인"
                         return
@@ -255,7 +249,7 @@ class ShortcutActions {
                     else if InStr(WinGetTitle(browser_hwnd), ":: 부산교통공사 포털시스템 ::") {
                         cUIA := UIA_Browser(":: 부산교통공사 포털시스템 ::")
                     }
-                    else if A_Index == 10{
+                    else if A_Index == 10 {
                         MsgBox "타이틀 매칭 실패 " WinGetTitle("A")
                         return
                     }
@@ -289,7 +283,7 @@ class ShortcutActions {
         }
     }
 
-    ; Win + Alt + Z : 일지 열기 (앱 모드)
+    ; Win + Alt + Z : 일지 열기 (일반 모드)
     static OpenLogAction(*) {
         WebAutoLogin.EnsureReady("WorkLog_View")
     }

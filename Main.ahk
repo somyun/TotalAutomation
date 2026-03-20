@@ -19,14 +19,14 @@
 ; ==============================================================================
 ; 컴파일러 지시문
 ; ==============================================================================
-;@Ahk2Exe-SetVersion 3.2.4.0
-;@Ahk2Exe-SetProductVersion v3.2.4
+;@Ahk2Exe-SetVersion 3.2.5.0
+;@Ahk2Exe-SetProductVersion v3.2.5
 ;@Ahk2Exe-SetDescription 통합자동화
 ; ==============================================================================
 ; ==============================================================================
 ; 초기화
 ; ==============================================================================
-global AppVersion := "v3.2.4"
+global AppVersion := "v3.2.5"
 global wvc := ""
 global wv := ""
 global MainGui := ""
@@ -44,14 +44,42 @@ if (ConfigManager.NeedsPasswordReset) {
 }
 
 ; ==============================================================================
+; 구버전 찌꺼기 파일 정리 (블랙리스트 방식)
+; ==============================================================================
+CleanupLegacyFiles() {
+    legacyDirs := [
+        A_ScriptDir "\automation",
+        A_ScriptDir "\node",
+        A_ScriptDir "\node_modules"
+    ]
+
+    legacyFiles := [
+        A_ScriptDir "\dist.zip",
+        A_ScriptDir "\temp_node_pkg.zip"
+    ]
+
+    for dir in legacyDirs {
+        if DirExist(dir)
+            try DirDelete(dir, true) ; true = 하위 파일까지 강제 삭제
+    }
+
+    for file in legacyFiles {
+        if FileExist(file)
+            try FileDelete(file)
+    }
+}
+CleanupLegacyFiles()
+
+; ==============================================================================
 ; [Self-Bootstrapping] 필수 파일 내장 및 추출
 ; ==============================================================================
 ; 설명: 컴파일된 Main.exe는 아래 파일들을 내장하고 있으며, 실행 시마다 최신 버전으로 덮어씁니다.
 ; 이를 통해 Main.exe만 배포해도 모든 구성요소가 자동으로 업데이트됩니다.
 if (A_IsCompiled) {
     try {
-        ; 1. 실행 파일 (updater.exe)
+        ; 1. 실행 파일 (updater.exe, 세션BG.exe)
         FileInstall("Updater.exe", A_ScriptDir "\Updater.exe", 1)
+        FileInstall("세션BG.exe", A_ScriptDir "\세션BG.exe", 1)
 
         ; 2. 라이브러리 (DLL)
         if !DirExist(A_ScriptDir "\Lib\64bit")
@@ -385,9 +413,6 @@ OnWebMessage(sender, args) {
 
                 ; 세션BG 실행 경로 설정
                 exePath := A_ScriptDir "\세션BG.exe"
-                ; FileInstall은 Main이 컴파일될 때 포함되도록 함
-                if A_IsCompiled and !FileExist(exePath)
-                    FileInstall("세션BG.exe", exePath, 1)
 
                 ; 기존 프로세스 정리
                 BackgroundProcessManager.Cleanup()
@@ -432,11 +457,6 @@ OnWebMessage(sender, args) {
         cfg := ConfigManager.Config
         payload := Map("type", "loadConfig", "data", cfg)
         wv.PostWebMessageAsJson(JSON.stringify(payload))
-    } else if (command == "checkSubstation") {
-        location := msg.Has("location") ? msg["location"] : ""
-        if (location != "") {
-            ERP점검.PreCheck(location)
-        }
     } else if (command == "msgbox") {
         text := msg.Has("text") ? msg["text"] : ""
         title := msg.Has("title") ? msg["title"] : "알림"
@@ -878,22 +898,35 @@ RunTaskAsync(taskName, msg) {
     ; 2. ERP 점검 (변전소/전기실 등)
     else if (taskName == "ERPCheck") {
 
-        ;일괄모드 시
-        if msg.Has("batchmode") ? msg["batchmode"] : "" {
+        ; 일괄모드 시
+        if msg.Has("batchmode") ? msg["batchmode"] : false {
+            locationMsg := ""
 
-            ;점검장소 마다 매크로 실행
-            loop msg["location"].Length { ;{{msg내 점검장소 map객체 배열의 길이}}
-                ERP점검.Start(msg["location"][A_Index])   ;점검잠소별 map객체를 msg로 전송
+            ; 점검장소마다 매크로 실행
+            loop msg["location"].Length {
+                batchItem := msg["location"][A_Index]
 
-                ;점검장소별 이름 누적
-                locationMsg .= msg["location"][A_Index]["location"] ", "
+                ; 개별 모드와 동일한 규격으로 임시 객체 생성하여 전달
+                singleMsg := msg.Clone()
+                singleMsg["location"] := batchItem["location"]
+                singleMsg["targetType"] := batchItem["targetType"]
+                singleMsg["targetOrder"] := batchItem["targetOrder"]
+                singleMsg["members"] := batchItem["members"]
+
+                ; ERP 점검 클래스의 개별 실행 함수 호출
+                ERP점검.Start(singleMsg, true)
+
+                ; 결과 메시지 누적
+                locationMsg .= batchItem["location"] ", "
             }
 
-            MsgBox("ERP 일괄 입력이 완료되었습니다.`n" locationMsg, "완료", "iconi")
+            ; 마지막 쉼표 제거
+            locationMsg := RTrim(locationMsg, ", ")
+            MsgBox("ERP 일괄 입력이 완료되었습니다.`n[진행 장소: " locationMsg "]", "완료", "iconi")
         }
-        else
-            ERP점검.Start(msg)
-
+        else {
+            ERP점검.Start(msg, false)
+        }
 
         EndMacro()
     }

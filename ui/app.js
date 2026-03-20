@@ -1344,6 +1344,8 @@ function renderERPCheck() {
             checkSpan.style.color = '#00C853'; // Vibrant Green
             checkSpan.style.marginRight = '5px';
             checkSpan.style.fontWeight = 'bold';
+            checkSpan.style.pointerEvents = 'none';
+
             btn.prepend(checkSpan);
         }
 
@@ -1361,6 +1363,7 @@ function renderERPCheck() {
             dot.style.marginLeft = '5px';
             dot.style.fontWeight = 'bold';
             dot.style.color = '#FFC107'; // Amber/Yellow
+            dot.style.pointerEvents = 'none';
             dot.innerText = '●';
             dot.title = "데이터 확인 중..."; // Initial tooltip
             btn.appendChild(dot);
@@ -1461,6 +1464,7 @@ function handleERPOrderListUpdate(orders) {
                 checkSpan.style.color = '#00C853'; // Vibrant Green
                 checkSpan.style.marginRight = '5px';
                 checkSpan.style.fontWeight = 'bold';
+                checkSpan.style.pointerEvents = 'none';
 
                 // Prepend to the button content
                 btn.prepend(checkSpan);
@@ -1721,15 +1725,43 @@ function initERPBatchModalApp() {
             },
             submitBatchTask() {
                 // Return structured Array of tasks mapping to original runTask
+                const format = this.isListFormat ? 'list' : 'summary';
+
                 const formattedBatchData = this.batchDataRaw.map((item, index) => {
+                    // targetType, targetOrder 속성 찾기 (appConfig.appSettings.locations 활용)
+                    let locType = "";
+                    let locOrder = "";
+                    if (appConfig && appConfig.appSettings && appConfig.appSettings.locations) {
+                        const locObj = appConfig.appSettings.locations.find(l => l.name === item.location);
+                        if (locObj) {
+                            locType = locObj.type || "";
+                            locOrder = locObj.order || "";
+                        }
+                    }
+
+                    // members 배열 완성 (id를 기반으로 실제 이름 찾기)
+                    const workerNames = [];
+                    item.workerIds.forEach(id => {
+                        const w = erpBatchAppInstance.workers.find(wk => wk.id === id);
+                        if (w) workerNames.push(w.name);
+                    });
+
                     return {
                         location: item.location,
-                        workersStr: this.batchPreviewList[index].workersText,
-                        workerIds: item.workerIds // kept for legacy compat if needed
+                        workersStr: this.batchPreviewList[index].workersText, // 알림 메시지 팝업에서의 목록 표시용 보존
+                        targetType: locType,
+                        targetOrder: locOrder,
+                        members: workerNames
                     };
                 });
 
-                sendMessageToAHK({ command: 'runTask', task: 'ERPCheckBatch', batchData: formattedBatchData });
+                sendMessageToAHK({
+                    command: 'runTask',
+                    task: 'ERPCheck',
+                    batchmode: true,
+                    format: format,
+                    location: formattedBatchData
+                });
                 this.closeModal();
             }
         }
@@ -2242,17 +2274,6 @@ function openERPWorkerModal() {
         return;
     }
 
-    // [New Logic] Check Substation Type & Trigger Pre-Check
-    const uid = selectedUserId;
-    if (uid && appConfig.appSettings && appConfig.appSettings.locations) {
-        const locData = appConfig.appSettings.locations.find(l => l.name === selectedERPLocation);
-        if (locData && locData.type === '변전소') {
-            // Trigger AHK Pre-Check (Async/Blocking handled by AHK MsgBox)
-            sendMessageToAHK({ command: 'checkSubstation', location: selectedERPLocation });
-            // Note: If AHK shows a blocking MsgBox, the WebView might pause or waiting
-            // user interaction on the AHK side.
-        }
-    }
 
     const modal = document.getElementById('erp-worker-modal');
     modal.style.display = 'flex';

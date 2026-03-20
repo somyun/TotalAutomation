@@ -735,7 +735,13 @@ h1 {
     box-shadow: 0 2px 5px rgba(76, 175, 80, 0.3);
 }
 
+.erp-btn .order-check-mark {
+    pointer-events: none;
+}
 
+.erp-btn .status-dot {
+    pointer-events: none;
+}
 
 .erp-footer {
     padding: 15px;

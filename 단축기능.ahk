@@ -111,7 +111,7 @@ class ExcelHandler {
             WinActivate("ahk_id " xl.Hwnd)
 
         } catch as e {
-            MsgBox "엑셀 생성 중 오류 발생: " e.Message, "오류", "IconStop"
+            MsgBox "엑셀 생성 중 오류 발생: " e.Message, "오류", "Iconx"
         }
     }
 
@@ -213,12 +213,16 @@ class ShortcutActions {
             MsgBox "로그인된 사용자가 없습니다."
             return
         }
+        if (!user || user["webPW"] == "") {
+            MsgBox "통합비번이 등록되어있지 않습니다."
+            return
+        }
 
         ; 1. 브라우저 실행
         url := "https://btcep.humetro.busan.kr/portal/"
         edgePath := "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 
-        Run(Format('"{1}" {2}', edgePath, url), , "max")
+        Run(Format('"{1}" {2}', edgePath, url), , "Max")
 
         ; 2. 쿠키 대기 (중복 로그인 방지: 세션BG 완료 시까지 대기)
         loop 16 {
@@ -238,49 +242,68 @@ class ShortcutActions {
         }
 
         ; 3. UIA 로그인 진행
-        loop 10 {
-            try {
-                browser_hwnd := WinWait("부산교통공사", , 3)
-                loop 10 {
-                    if InStr(WinGetTitle(browser_hwnd), ":: 부산교통공사 ::") {
-                        MsgBox "이미로그인"
-                        return
+        try {
+
+            TargetHwnd := 0
+            loop 50 {
+                hwnds := WinGetList("ahk_exe msedge.exe")
+                for hwnd in hwnds {
+                    if InStr(WinGetTitle(hwnd), ":: 부산교통공사 ::") { ;이미 로그인상태 여부 확인
+                        cUIA := UIA.ElementFromHandle(hwnd)
+                        try {
+                            cUIA.WaitElement({ ClassName: "btn_logout" }, 1500)
+                            WinMaximize hwnd
+                            return
+                        }
+                        catch
+                            continue 2
                     }
-                    else if InStr(WinGetTitle(browser_hwnd), ":: 부산교통공사 포털시스템 ::") {
-                        cUIA := UIA_Browser(":: 부산교통공사 포털시스템 ::")
+                    else if InStr(WinGetTitle(hwnd), ":: 부산교통공사 포털시스템 ::") { ;로그인 필요
+                        WinMaximize hwnd
+                        cUIA := UIA_browser(hwnd)
+                        TargetHwnd := hwnd
+                        break 2
                     }
-                    else if A_Index == 10 {
-                        MsgBox "타이틀 매칭 실패 " WinGetTitle("A")
-                        return
+                    else if InStr(WinGetTitle(hwnd), "로그 아웃 ") { ;중복 로그인 발생 처리 후 로그인
+                        UIA.ElementFromHandle(hwnd).WaitElement({ LocalizedType: "단추", Name: "확인" }, 3000).Invoke()
+                        WinMaximize hwnd
+                        cUIA := UIA.ElementFromHandle(hwnd)
+                        TargetHwnd := hwnd
+                        break 2
                     }
-                    Sleep(100)
                 }
-
-                ; 아이디 입력창 대기
-                cUIA.WaitElement({ AutomationId: "userId" }, 1000).Value := user["id"]
-                cUIA.WaitElement({ AutomationId: "password" }, 1000).Value := user["webPW"]
-                cUIA.WaitElement({ ClassName: "btn_login" }, 1000).Invoke()
-
-                ; 2차 비밀번호
-                cUIA.WaitElement({ AutomationId: "certi_num" }, 3000).Value := user["pw2"]
-                cUIA.WaitElement({ ClassName: "btn_blue" }, 1000).Invoke()
-
-                cUIA.WaitTitleChange(":: 부산교통공사 ::", 5000)
-
-                ; 로그인 후 포커스 해결
-                cUIA.WaitElement({ ClassName: "lastestip" }, 5000)
-                cUIA.send("{esc}")
-
-                break
-
-            } catch as e {
-                Sleep 250
-                if A_Index == 10 {
-                    MsgBox("타임아웃, cUIA 할당 실패`n" e.Message)
+                Sleep 50
+                if A_Index == 50 {
+                    MsgBox "인터넷 브라우저 상태를 감지할 수 없습니다"
                     return
                 }
             }
+
+            ; 아이디 입력창 대기
+            cUIA.WaitElement({ AutomationId: "userId" }, 3000).Value := user["id"]
+            cUIA.WaitElement({ AutomationId: "password" }, 1000).Value := user["webPW"]
+            cUIA.WaitElement({ ClassName: "btn_login" }, 1000).Invoke()
+
+            ; 2차 비밀번호
+            cUIA.WaitElement({ AutomationId: "certi_num" }, 3000).Value := user["pw2"]
+            cUIA.WaitElement({ ClassName: "btn_blue" }, 1000).Invoke()
+
+            ; 브라우저 접미사나 SetTitleMatchMode 설정에 영향을 받지 않도록 InStr 기반 대기 로직 적용 (최대 5초)
+            loop 50 {
+                if InStr(WinGetTitle(TargetHwnd), ":: 부산교통공사 ::")
+                    break
+                Sleep 100
+            }
+
+            ; 로그인 후 포커스 해결
+            cUIA.WaitElement({ ClassName: "lastestip" }, 5000)
+            cUIA.send("{esc}")
+
         }
+        catch as e
+            MsgBox("UIA 할당 실패`n" e.Line " " e.Message)
+
+        return
     }
 
     ; Win + Alt + Z : 일지 열기 (일반 모드)

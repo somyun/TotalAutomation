@@ -8,6 +8,7 @@ RunVehicleLog(data) {
 
     ; --- 1. 브라우저/로그인 확인 ---
     if !cUIA := WebAutoLogin.EnsureReady("WorkLog_View") {
+        LogDebug("[오류] cUIA 반환 실패 (RunVehicleLog)")
         MsgBox "cUIA 반환 실패"
         return
     }
@@ -21,11 +22,13 @@ RunVehicleLog(data) {
     try {
         cUIA.WaitElement({ Name: "추가 조회 삭제" }).WaitElement({ AutomationId: "btnReg" }, 3000).Invoke()
     } catch {
+        LogDebug("[오류] 차량일지 등록 버튼을 찾을 수 없음")
         MsgBox("차량일지 등록 버튼을 찾을 수 없습니다.")
         return
     }
 
     if !WinWaitNotActive(thisId, , 5) {
+        LogDebug("[오류] 차량일지 추가 페이지 오픈 실패 Timeout")
         MsgBox("차량일지 추가 페이지 오픈 실패 Timeout")
         return
     }
@@ -39,6 +42,7 @@ RunVehicleLog(data) {
     cUIA.WaitElement({ Type: "Image", Name: "차량번호" }, 3000).Invoke()
 
     if !WinWaitNotActive(carPage, , 5) {
+        LogDebug("[오류] 차량선택 페이지 오픈 실패 Timeout")
         MsgBox("차량선택 페이지 오픈 실패 Timeout")
         ExitApp
     }
@@ -54,6 +58,7 @@ RunVehicleLog(data) {
     cUIA.WaitElement({ Type: "Image", Name: "작업장" }, 3000, , index := 2).Invoke()
 
     if !WinWaitNotActive(carPage, , 5) {
+        LogDebug("[오류] 작업장 페이지 오픈 실패 Timeout")
         MsgBox("작업장 페이지 오픈 실패 Timeout")
         ExitApp
     }
@@ -78,6 +83,7 @@ RunVehicleLog(data) {
     cUIA.FindAll({ Type: "Image", Name: "위치" })[1].Invoke()
 
     if !WinWaitNotActive(carPage, , 5) {
+        LogDebug("[오류] 작업시점 페이지 오픈 실패 Timeout (1차)")
         MsgBox("작업시점 페이지 오픈 실패 Timeout")
         ExitApp
     }
@@ -99,6 +105,7 @@ RunVehicleLog(data) {
     cUIA.FindAll({ Type: "Image", Name: "위치" })[2].Invoke()
 
     if !WinWaitNotActive(carPage, , 5) {
+        LogDebug("[오류] 작업시점 페이지 오픈 실패 Timeout (2차)")
         MsgBox("작업시점 페이지 오픈 실패 Timeout")
         ExitApp
     }
@@ -170,10 +177,13 @@ RunVehicleLog(data) {
 
 bringApproval(data) {
 
+    global wv
+
     own_id := WinExist("A")
 
     ; --- 1. 브라우저/로그인 확인 ---
     if !WebAutoLogin.EnsureReady("SessionCheck") {
+        LogDebug("[오류] XPLATFORM 세션 연결 실패 (bringApproval)")
         MsgBox "XPLATFORM 세션 연결에 실패했습니다."
         StopMacro()
         return
@@ -188,8 +198,9 @@ bringApproval(data) {
             if (PixelGetColor(450, 470) == 0x0063B5) {
                 targetID := WinExist("A")
                 WinClose("ahk_id " targetId)
+                LogDebug("[오류] 로그인 실패 감지 (bringApproval)")
                 MsgBox "로그인 실패"
-                return false
+                return
             }
 
             ; 무한 루프 방지
@@ -199,11 +210,13 @@ bringApproval(data) {
         }
     } else {
         ; 창이 안 뜨면 실패
+        LogDebug("[오류] 세션 준비된 브라우저가 없음 (bringApproval)")
         MsgBox("세션 준비된 브라우저가 없습니다.")
-        return false
+        return
     }
 
     if !WinWait("개별업무통합관리 - 선로출입현황 조회", , 30) {
+        LogDebug("[오류] timeout - 선로출입현황 조회 화면이 뜨지 않음")
         MsgBox "timeout - 선로출입현황 조회 화면이 뜨지 않습니다."
         return
     }
@@ -219,16 +232,25 @@ bringApproval(data) {
             xldata["통합문서"].quit()
             resultData := Map("승인번호", 승인번호, "승인부서", 승인부서, "승인자", 승인자)
         }
-        catch
+        catch {
+            LogDebug("[오류] 엑셀 자동 추출 불가 (예외 발생)")
             MsgBox "엑셀 자동 추출이 불가능한 상태입니다`n확인 후 직접 입력바랍니다", , "icon!"
+        }
     }
-    else
+    else {
+        LogDebug("[오류] 엑셀 자동 추출 불가 (xldata=false)")
         MsgBox "엑셀 자동 추출이 불가능한 상태입니다`n확인 후 직접 입력바랍니다", , "icon!"
+    }
 
     WinClose("개별업무통합관리")
     WinActivate(own_id)
 
-    return resultData
+    if resultData {
+        payload := Map("type", "approvalInfo", "data", resultData)
+        wv.PostWebMessageAsJson(JSON.stringify(payload))
+    }
+
+    return
 
 }
 
@@ -263,7 +285,8 @@ bringApproval(data) {
         Sleep 1000
         Click 1200, 190									;엑셀열기
         if !WinWaitActive("Microsoft Excel - Sheet", , 10) {
-            MsgBox "timeout"
+            LogDebug("[오류] 엑셀 로드 timeout (승인정보_엑셀추출)")
+            MsgBox "엑셀 로드 timeout"
             ExitApp
         }
         sleep 1000
@@ -273,6 +296,7 @@ bringApproval(data) {
         ws := wb.Worksheets("선로출입현황")
     }
     catch {
+        LogDebug("[오류] 엑셀 자동 추출 불가 (예외 catch) (승인정보_엑셀추출)")
         MsgBox "엑셀 자동 추출이 불가능한 상태입니다.`n확인 후 직접 입력바랍니다", , "icon!"
 
         return false
@@ -321,6 +345,7 @@ bringApproval(data) {
 lensInput(originalID, office := "", sname := "") {
 
     if !WinWaitNotActive(originalId, , 5) {
+        LogDebug("[오류] lensInput Timeout")
         MsgBox("ERROR - lensInput Timeout", "timeout", "icon!")
         return
     }
@@ -361,6 +386,7 @@ menuClick(cUIA, str) {
         Sleep 100
         menubtn.FindElement({ Name: str }).ControlClick()
     } catch {
+        LogDebug("[오류] 메뉴 클릭 실패: " str)
         MsgBox("메뉴 클릭 실패: " str)
     }
     return

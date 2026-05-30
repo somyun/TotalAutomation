@@ -12,12 +12,6 @@ class ERP점검 {
     ; Entry Point
     ; --------------------------------------------------------------------------
     static Start(msg, batchmode) {
-
-        location := msg.Has("location") ? msg["location"] : ""
-        members := msg.Has("members") ? msg["members"] : []
-        format := msg.Has("format") ? msg["format"] : "summary"
-        targetType := msg.Has("targetType") ? msg["targetType"] : ""
-        targetOrder := msg.Has("targetOrder") ? msg["targetOrder"] : ""
         userID := msg.Has("ID") ? msg["ID"] : ""
         userPW := msg.Has("sapPW") ? msg["sapPW"] : ""
 
@@ -26,12 +20,83 @@ class ERP점검 {
             return false
         }
 
-        if (location == "") {
-            MsgBox("예외 발생 : 장소 미지정", "오류", "iconx")
-            return false
-        }
+        if (batchmode) {
+            locations := msg["location"] ; Array of location objects
+            downQueue := []
+            locationMsg := ""
 
-        ; 1. 멤버 문자열 조합
+            ; 1. 다운로드 대상 수집
+            for item in locations {
+                loc := item["location"]
+                if (item["targetType"] == "변전소" && this.ValidLocations.Has(loc)) {
+                    downQueue.Push(loc)
+                } else if (item["targetType"] == "변전소" && !this.ValidLocations.Has(loc)) {
+                    MsgBox("웹앱에 " loc "의 데이터가 저장되어있지 않습니다.`n ERP 작업보고 일괄모드를 중단합니다.", "진행불가", "0x1 Icon!")
+                    return false
+                }
+            }
+
+            ; 2. 다운로드 비동기 큐 실행 (cmd & 체인)
+            if (downQueue.Length > 0) {
+                this.BatchDownSheetAsync(downQueue)
+            }
+
+            ; 3. 매크로 큐 실행
+            for item in locations {
+                loc := item["location"]
+                mems := item["members"]
+                type := item["targetType"]
+                order := item["targetOrder"]
+
+                memberStr := this.GetMemberStr(mems, msg.Has("format") ? msg["format"] : "summary")
+                this.Macro(memberStr, loc, userID, userPW, type, order, true)
+                locationMsg .= loc ", "
+            }
+
+            locationMsg := RTrim(locationMsg, ", ")
+            MsgBox("ERP 일괄 입력이 완료되었습니다.`n[진행 장소: " locationMsg "]", "완료", "iconi")
+            return true
+        }
+        else {
+            ; 개별 모드
+            loc := msg.Has("location") ? msg["location"] : ""
+            mems := msg.Has("members") ? msg["members"] : []
+            type := msg.Has("targetType") ? msg["targetType"] : ""
+            order := msg.Has("targetOrder") ? msg["targetOrder"] : ""
+
+            if (loc == "") {
+                MsgBox("예외 발생 : 장소 미지정", "오류", "iconx")
+                return false
+            }
+            if (mems.Length == 0) {
+                MsgBox("예외 발생 : 작업자 미지정", "오류", "iconx")
+                return false
+            }
+
+            memberStr := this.GetMemberStr(mems, msg.Has("format") ? msg["format"] : "summary")
+
+            if (type == "변전소") {
+                if (this.ValidLocations.Has(loc)) {
+                    if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . loc . " (WEB앱 연동)`n점검자 : " . memberStr, "진행합니다",
+                        "0x1 Iconi") != "OK")
+                        return false
+                    this.DownSheetAsync(loc)
+                } else {
+                    if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . loc . " (엑셀 수동입력)`n점검자 : " . memberStr, "진행합니다",
+                        "0x1 Icon!") != "OK")
+                        return false
+                    this.OpenLocalExcel(loc)
+                }
+            } else {
+                if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . loc . "`n점검자 : " . memberStr, "진행합니다", "0x1 Iconi") != "OK")
+                    return false
+            }
+
+            return this.Macro(memberStr, loc, userID, userPW, type, order, false)
+        }
+    }
+
+    static GetMemberStr(members, format) {
         memberStr := ""
         if (members.Length > 0) {
             if (format == "summary") {
@@ -41,65 +106,40 @@ class ERP점검 {
                     memberStr .= (index == 1 ? "" : ", ") . name
                 }
             }
-        } else {
-            MsgBox("예외 발생 : 작업자 미지정", "오류", "iconx")
-            return false
         }
-
-        ; 2. 점검 시작
-        isSubstation := (targetType == "변전소")
-        isWebMode := false
-
-        if !batchMode {
-            if (isSubstation) {
-                if (this.ValidLocations.Has(location)) {
-                    ; [GREEN] WEB 연동 가능
-                    isWebMode := true
-                    if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . location . " (WEB앱 연동)`n점검자 : " . memberStr,
-                        "진행합니다", "0x1 Iconi") != "OK") {
-                        return false
-                    }
-                    ; 비동기 다운로드 시작 (SAP 실행되는 동안 백그라운드 다운로드)
-                    this.DownSheetAsync(location)
-                } else {
-                    ; [RED] WEB 연동 불가 (또는 아직 작성 안됨) -> 수동 모드
-                    if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . location . " (엑셀 수동입력)`n점검자 : " . memberStr,
-                        "진행합니다", "0x1 Icon!") != "OK") {
-                        return false
-                    }
-                    ; 로컬 엑셀 열기 (사용자가 확인/수정 후 종료하면 계속 진행)
-                    this.OpenLocalExcel(location)
-                }
-            } else {
-                ; 변전소 외 (전기실 등)
-                if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . location . "`n점검자 : " . memberStr,
-                    "진행합니다", "0x1 Iconi") != "OK") {
-                    return false
-                }
-            }
-        }
-        ;일괄모드 시
-        else {
-            if isSubstation {
-                if this.ValidLocations.Has(location) {
-                    isWebMode := true
-                    this.DownSheetAsync(location)
-                }
-                else {
-                    MsgBox "웹앱에 " location "의 데이터가 저장되어있지 않습니다.`n ERP 작업보고 일괄모드를 중단합니다.", "진행불가", "0x1 Icon!"
-                    return false
-                }
-            }
-        }
-
-        ; 3. SAP 자동 입력 실행
-        ; isWebMode 플래그는 여기서 딱히 필요 없지만(파일 날짜로 체크하므로), 로직 흐름상 명확히 함
-        return this.Macro(memberStr, location, userID, userPW, targetType, targetOrder, batchMode)
+        return memberStr
     }
 
     ; --------------------------------------------------------------------------
     ; Web / Excel Logic
     ; --------------------------------------------------------------------------
+    static BatchDownSheetAsync(locations) {
+        global WebAppURL, TARGET_SPREADSHEET_ID
+        cmds := ""
+
+        for index, ss in locations {
+            ec_ss := URLEncode(ss)
+            url := WebAppURL . "?fileId=" . TARGET_SPREADSHEET_ID . "&sheetName=" . ec_ss . "&filename=" . ec_ss .
+                ".xlsx"
+            tempFile := A_WorkingDir . "\temp_" . ss . ".json"
+            localFile := A_WorkingDir . "\" . ss . ".xlsx"
+
+            if FileExist(tempFile)
+                FileDelete(tempFile)
+            if FileExist(localFile)
+                FileDelete(localFile)
+
+            curlCmd := 'curl -sL --ssl-no-revoke -o "' . tempFile . '" "' . url . '"'
+            if (index == 1)
+                cmds := curlCmd
+            else
+                cmds .= " & " . curlCmd
+        }
+
+        if (cmds != "")
+            Run(A_ComSpec ' /c ' cmds, , "Hide")
+    }
+
     static DownSheetAsync(ss) {
         global WebAppURL, TARGET_SPREADSHEET_ID
 
@@ -108,11 +148,7 @@ class ERP점검 {
             url := WebAppURL . "?fileId=" . TARGET_SPREADSHEET_ID . "&sheetName=" . ec_ss . "&filename=" . ec_ss .
                 ".xlsx"
 
-            ; 임시 JSON 파일 경로 (고정된 이름 사용 또는 ID 기반)
-            ; 여기서는 간편함을 위해 working dir에 temp_ + location + .json 저장
             tempFile := A_WorkingDir . "\temp_" . ss . ".json"
-
-            ; 기존 임시 파일 및 타겟 엑셀 파일 삭제
             if FileExist(tempFile)
                 FileDelete(tempFile)
 
@@ -120,8 +156,6 @@ class ERP점검 {
             if FileExist(localFile)
                 FileDelete(localFile)
 
-            ; 비동기 실행 (Run) - JSON으로 다운로드됨
-            ; -s: Silent, -L: Follow redirects, -o: Output file
             Run 'curl -sL --ssl-no-revoke -o "' . tempFile . '" "' . url . '"', , "Hide"
             return true
         } catch {
@@ -135,53 +169,84 @@ class ERP점검 {
     static ProcessDownload(ss) {
         tempFile := A_WorkingDir . "\temp_" . ss . ".json"
         targetFile := A_WorkingDir . "\" . ss . ".xlsx"
+        tempTarget := A_WorkingDir . "\" . ss . "_writing.xlsx"
 
-        if !FileExist(tempFile)
+        if !FileExist(tempFile) {
+            LogDebug("ProcessDownload [" ss "]: tempFile 없음 → 다운로드 미완료")
             return false
+        }
 
         try {
-            ; 1. JSON 읽기
-            ; 파일이 쓰기 중일 수 있으므로 읽기 시도
             fileContent := ""
             try {
                 fileContent := FileRead(tempFile, "UTF-8")
             } catch {
-                return false ; 아직 다운로드 중이거나 락 걸림
+                LogDebug("ProcessDownload [" ss "]: tempFile 읽기 실패 (락 또는 쓰기 중)")
+                return false
             }
 
-            if (fileContent == "")
+            if (fileContent == "") {
+                LogDebug("ProcessDownload [" ss "]: tempFile 비어있음")
                 return false
+            }
 
-            ; 2. 파싱 및 디코딩
             data := JSON.parse(fileContent)
 
             if (data.Has("error")) {
+                LogDebug("ProcessDownload [" ss "]: 서버 오류 → " data["error"])
                 MsgBox("서버 오류: " . data["error"], "오류", "iconx")
-                try FileDelete(tempFile) ; 에러 파일 삭제
-                return false ; 영구 실패지만 루프에서 계속 재시도하지 않도록 처리는 상위에서
-            }
-
-            if (!data.Has("base64")) {
-                ; JSON 형식이 아님 (혹시라도 그냥 엑셀이 받아진 경우?)
+                try FileDelete(tempFile)
                 return false
             }
 
-            base64Str := data["base64"]
-            binaryData := this.BufferFromBase64(base64Str)
+            if (!data.Has("base64")) {
+                LogDebug("ProcessDownload [" ss "]: base64 키 없음 (JSON 구조 이상)")
+                return false
+            }
 
-            ; 3. 엑셀 파일로 저장
-            f := FileOpen(targetFile, "w")
+            binaryData := this.BufferFromBase64(data["base64"])
+            LogDebug("ProcessDownload [" ss "]: 디코딩 완료, 크기=" binaryData.Size " bytes")
+
+            ; 원자적 쓰기: 임시 파일에 먼저 쓰고 완료 후 rename
+            f := FileOpen(tempTarget, "w")
             f.RawWrite(binaryData)
             f.Close()
 
-            ; 4. 성공 시 임시 파일 삭제
+            if FileExist(targetFile)
+                FileDelete(targetFile)
+            FileMove(tempTarget, targetFile)
+
+            LogDebug("ProcessDownload [" ss "]: xlsx 저장 완료")
             try FileDelete(tempFile)
             return true
 
         } catch as e {
-            ; 파싱 에러 등은 아직 다운로드가 덜 되어서 그럴 수 있음
+            LogDebug("ProcessDownload [" ss "]: 예외 → " e.Message)
+            if FileExist(tempTarget)
+                try FileDelete(tempTarget)
             return false
         }
+    }
+
+    ; --------------------------------------------------------------------------
+    ; 다운로드 완료 폴링 대기 (비동기 curl이 tempFile을 완성할 때까지)
+    ; --------------------------------------------------------------------------
+    static WaitForDownload(ss, timeoutSec := 30) {
+        tempFile := A_WorkingDir . "\temp_" . ss . ".json"
+        maxTicks := (timeoutSec * 1000) // 200
+
+        loop maxTicks {
+            if FileExist(tempFile) {
+                try {
+                    if FileGetSize(tempFile) > 200
+                        return true
+                }
+            }
+            Sleep 200
+        }
+
+        LogDebug("WaitForDownload [" ss "]: " timeoutSec "초 타임아웃")
+        return false
     }
 
     static BufferFromBase64(str) {
@@ -358,7 +423,7 @@ class ERP점검 {
                         break ; 변환 성공 (이제 Loop 다시 돌면 1번 조건 만족)
                     }
 
-                    if (A_Index == 20) {
+                    if (A_Index == 60) {
                         MsgBox("점검데이터 다운로드에 실패하였습니다`n처음부터 다시 시도하시기 바랍니다", "타임아웃", "iconx")
                         return ; 매크로 중단
                     }

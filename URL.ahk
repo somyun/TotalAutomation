@@ -4,6 +4,8 @@
 global WebAppURL :=
     "https://script.google.com/macros/s/AKfycbyoSMf94VffKSvIoBNJHKkQqY213h6M9KhTSBJ1BK9ed8dW64d50ZbjGWGu4n31bJB-/exec"
 global TARGET_SPREADSHEET_ID := "19rgzRnTQtOwwW7Ts5NbBuItNey94dAZsEnO7Tk0cm6s"
+global ConfigBinId   := "6a01f09c250b1311c334eb00"     ; JSONBin.io 설정값 저장 ID
+global ConfigApiKey  := "$2a$10$vYJyJAvjKqXjjP1f91dIsuz0aohD49EAsE/mnIjXLC7Nak12lgEq6"    ; JSONBin.io 설정값 저장 API_Key
 
 ; URL 인코딩 함수 (UTF-8)
 URLEncode(str) {

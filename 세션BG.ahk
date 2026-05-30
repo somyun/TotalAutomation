@@ -1,4 +1,5 @@
 #Requires AutoHotkey v2
+#SingleInstance Ignore ; 이미 실행 중이면 새로 실행된 쪽을 즉시 종료
 #Include Lib\JSON.ahk
 #Include Lib\chrome.ahk
 
@@ -8,6 +9,13 @@
 StartTime := A_TickCount
 DEBUG_FILE := A_ScriptDir "\debug_bg.txt"
 FileAppend("`n", DEBUG_FILE, "UTF-8")
+
+; ─────────────────────────────────────────────────────────
+; 전역 변수 선언 (스크립트 최상단 또는 호출 전)
+; ─────────────────────────────────────────────────────────
+global g_fetchReqId := ""
+global g_fetchDone := false
+global g_fetchPage := ""    ; Page 객체를 전역으로 공유
 
 LogDebug("========== 세션BG 시작 ==========")
 
@@ -197,31 +205,31 @@ try {
     ; [Step 2.5] 메인포털 후속 절차
     ; ==============================================================================
     LogDebug("[Step 2.5-1] 메인포털 후속 절차 시도1...")
-    
+
     ; 바구니 교체: btcep_cookies 사용
     current_cookies := btcep_cookies
-    
+
     http.Open("GET", "https://btcep.humetro.busan.kr/", false)
     http.Option[6] := false
     SetHeaders("DEFAULT", "https://btcep.humetro.busan.kr/", btcep_cookies)
-    
+
     http.Send()
     if (http.Status != 302) {
         msgbox("뭔가 실패1 (Status: " http.Status ")")
         ExitApp(1)
     }
-    
+
     LogDebug("[Step 2.5-2] 메인포털 후속 절차 시도2...")
-    
+
     http.Open("GET", "https://btcep.humetro.busan.kr/portal", false)
     SetHeaders("DEFAULT", "https://btcep.humetro.busan.kr/", btcep_cookies)
-    
+
     http.Send()
     if (http.Status != 200) {
         msgbox("뭔가 실패2 (Status: " http.Status ")")
         ExitApp(1)
     }
-    
+
     current_cookies := niw_cookies
     http.Option[6] := true
     */
@@ -256,6 +264,7 @@ try {
         k_val := match[1]
         LogDebug("[Step 4] K값 획득 성공: " k_val)
     } else {
+        LogDebug("[Step 4] 오류: K값 추출 실패. 서버 응답이 비정상입니다.")
         msgbox("K값 추출 실패")
         ExitApp(1)
     }
@@ -402,6 +411,16 @@ try {
     ; ==============================================================================
     LogDebug("[Step 8] SearchValueData 세션 예열 시작...")
 
+    ep_SSOgetSabun_url :=
+        "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.ep.ssoLogin.SSOgetSabun"
+
+    http.Open("POST", ep_SSOgetSabun_url, false)
+    SetHeaders(, kURL, ep_cookies)
+    http.SetRequestHeader("Origin", "http://ep.humetro.busan.kr")
+    http.SetRequestHeader("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+
+    http.Send(sso_payload)
+
     ; 1. [Step 7]에서 추출한 userInfoStr에서 필요한 값 뽑아내기
     val_sabun := ""
     val_name := ""
@@ -417,7 +436,7 @@ try {
     if RegExMatch(userInfoStr, "BUSEO_NAME=([^,]+)", &m)
         val_buseo_nm := m[1]
 
-    LogDebug("예열 파라미터: 사번=" val_sabun ", 이름=" val_name ", 부서=" val_buseo_cd)
+    LogDebug("예열 파라미터: 사번=" val_sabun ", 이름=" val_name ", 부서코드=" val_buseo_cd ", 부서이름=" val_buseo_nm)
 
     ; 2. 페이로드(Body) JSON 조립
     warmup_payload := '{"AJAX_TYPE":"HEAD","SABUN":"' val_sabun '","NAME":"' val_name '","BUSEO_CODE":"' val_buseo_cd '","BUSEO_NAME":"' val_buseo_nm '"}'
@@ -483,9 +502,79 @@ try {
             }
             LogDebug("[Step 9] [디버그 모드] CDP 쿠키 주입 완료.")
 
-            DirectURL :=
-                "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fhumetro!2frole!2fmaintenance!2frole.09!2fworkset.07!2fworkset.01!2fworkset.03!2fiview.02?sapDocumentRenderingMode=EmulateIE8"
-            Page.Call("Page.navigate", Map("url", DirectURL))
+            ; =====================================================================
+            ; [테스트 코드 시작] Page.navigate 호출
+            ; =====================================================================
+            ; 1. 가짜 성공 응답 조립
+            ;    split(":") 결과: ["", sabun, name, werks, plantnm, arbpl, arbpltext, ...]
+            ;    rsltData[0]=="" → if분기, [3]=WERKS, [5]=ARBPL, [6]=ARBPLTEXT
+            fakeResp := ":116713::5010:전기사업소:5129:호포전기분소::::::::::::::::::::::::::::::::"
+            fakeB64 := _Base64Encode(fakeResp)
+            LogDebug("[Fetch] 가짜 응답 조립: " fakeResp)
+
+            ; 전역에 Page 공유
+            g_fetchReqId := ""
+            g_fetchDone := false
+            g_fetchPage := Page
+
+            ; 콜백 등록 (함수 참조)
+            Page._callback := _FetchCallback
+
+            ; Fetch 인터셉터 활성화
+            Page.Call("Fetch.enable", Map(
+                "patterns", [Map(
+                    "urlPattern", "*WorkLogData*",
+                    "requestStage", "Request"
+                )]
+            ))
+
+            ; 4. 페이지 이동
+            outiframeURL :=
+                "http://ep.humetro.busan.kr/irj/portal?NavigationTarget=ROLES%3A%2F%2Fportal_content%2Fhumetro%2Frole%2Fmaintenance%2Frole.09%2Fworkset.07%2Fworkset.01%2Fworkset.03"
+            innerframeURL :=
+                "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fhumetro!2frole!2fmaintenance!2frole.09!2fworkset.07!2fworkset.01!2fworkset.03!2fiview.02"
+
+            Page.Call("Page.navigate", Map("url", outiframeURL))
+            LogDebug("[Fetch] navigate 완료. 인터셉트 대기중...")
+
+            ; ─────────────────────────────────────────────────────────
+            ; 메인 루프: requestId 캡처 대기 → fulfillRequest 발사
+            ; ─────────────────────────────────────────────────────────
+            intercepted := false
+            loop 150 {                  ; 최대 15초 (150 × 100ms)
+                Sleep(100)
+
+                if g_fetchReqId == ""
+                    continue
+
+                ; 캡처된 requestId로 가짜 응답 주입
+                try {
+                    Page.Call("Fetch.fulfillRequest", Map(
+                        "requestId", g_fetchReqId,
+                        "responseCode", 200,
+                        "responseHeaders", [Map("name", "content-type",
+                            "value", "text/plain; charset=utf-8")],
+                        "body", fakeB64
+                    ))
+                    LogDebug("[Fetch] fulfillRequest 완료")
+                    intercepted := true
+                } catch as e {
+                    LogDebug("[Fetch] fulfillRequest 오류: " e.Message)
+                }
+
+                g_fetchDone := true
+                g_fetchReqId := ""
+                break
+            }
+
+            ; 인터셉터 해제 및 콜백 정리
+            Page.Call("Fetch.disable")
+            Page._callback := 0
+
+            if intercepted
+                LogDebug("[Fetch] 인터셉트 성공")
+            else
+                LogDebug("[Fetch] 경고: 15초 내 BOOKSCH 미감지")
 
             LogDebug("[Step 9] [디버그 모드] 업무일지 리스트 페이지 호출 성공. 화면을 확인하세요.")
 
@@ -494,7 +583,7 @@ try {
 
         } catch as err {
             LogDebug("CDP 브라우저 제어 중 오류 발생: " err.Message)
-            MsgBox("브라우저 실행 중 오류가 발생했습니다.`n" err.Message, "CDP Error")
+            MsgBox("브라우저 실행 중 오류가 발생했습니다.`nLine : " err.Line "`n" err.Message, "CDP Error")
             ExitApp(1)
         }
     } else {
@@ -543,7 +632,11 @@ try {
     ExitApp
 
 } catch as e {
-    MsgBox A_Clipboard := e.Message
+    if InStr(e.Message, "0x80072EE7")
+        MsgBox "통합 인트라넷에 연결이 되어 있지 않습니다", "통합자동화", "icon!"
+    else
+        MsgBox "백그라운드 연결 에러`nLine: " e.Line " " e.Message
+
     LogDebug("치명적 오류`n" e.Message "`n")
     FileAppend('{"error": "' . e.Message . '"}', "*")
     ExitApp(1)
@@ -564,4 +657,66 @@ EncodeURI(str) {
     static doc := ComObject("htmlfile")
     doc.write('<meta http-equiv="X-UA-Compatible" content="IE=edge">')
     return doc.parentWindow.encodeURIComponent(str)
+}
+
+; ──────────────────────────────────────────────────────────
+; Base64 유틸 함수 (AHK v2)
+; ──────────────────────────────────────────────────────────
+_Base64Encode(str) {
+    bytes := Buffer(StrPut(str, "UTF-8") - 1)
+    StrPut(str, bytes, "UTF-8")
+
+    static crypt := DllCall("LoadLibrary", "Str", "Crypt32.dll")
+    size := 0
+    DllCall("Crypt32\CryptBinaryToString", "Ptr", bytes, "UInt", bytes.Size,
+        "UInt", 0x40000001, "Ptr", 0, "UInt*", &size)
+    buf := Buffer(size * 2)
+    DllCall("Crypt32\CryptBinaryToString", "Ptr", bytes, "UInt", bytes.Size,
+        "UInt", 0x40000001, "Ptr", buf, "UInt*", &size)
+    result := StrGet(buf, "UTF-16")
+    return StrReplace(StrReplace(result, "`r", ""), "`n", "")
+}
+
+_Base64Decode(b64) {
+    static crypt := DllCall("LoadLibrary", "Str", "Crypt32.dll")
+    size := 0
+    DllCall("Crypt32\CryptStringToBinary", "Str", b64, "UInt", 0, "UInt", 0x00000001,
+        "Ptr", 0, "UInt*", &size, "Ptr", 0, "Ptr", 0)
+    buf := Buffer(size)
+    DllCall("Crypt32\CryptStringToBinary", "Str", b64, "UInt", 0, "UInt", 0x00000001,
+        "Ptr", buf, "UInt*", &size, "Ptr", 0, "Ptr", 0)
+    return StrGet(buf, size, "UTF-8")
+}
+
+; ─────────────────────────────────────────────────────────
+; 콜백 함수 - 명명 함수로 정의 (AHK v2 정석)
+; ─────────────────────────────────────────────────────────
+_FetchCallback(msg) {
+    global g_fetchReqId, g_fetchDone, g_fetchPage
+
+    ; 이미 처리됐거나 관심 없는 메시지 즉시 반환
+    if g_fetchDone
+        return
+    if !msg.Has("method")
+        return
+    if msg["method"] != "Fetch.requestPaused"
+        return
+
+    params := msg["params"]
+    reqId := params["requestId"]
+
+    ; postData에서 BOOKSCH 여부 확인
+    postData := ""
+    if params.Has("request") && params["request"].Has("postData")
+        postData := params["request"]["postData"]
+
+    if InStr(postData, "BOOKSCH") {
+        ; 메인 루프로 requestId 전달 (콜백 안에서 Call() 금지)
+        g_fetchReqId := reqId
+        LogDebug("[Fetch CB] BOOKSCH 캡처. requestId: " reqId)
+    } else {
+        ; BOOKSCH 아닌 다른 WorkLogData 요청은 그냥 통과
+        ; WaitForResponse=false → 응답 대기 없이 즉시 반환 (콜백 안 교착 방지)
+        g_fetchPage.Call("Fetch.continueRequest", Map("requestId", reqId), false)
+    }
 }

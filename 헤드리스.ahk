@@ -126,8 +126,6 @@ class HeadlessAutomation {
 
         ; 2. Payload 구성
         ; WorkLogData는 x-www-form-urlencoded 방식을 사용함
-        ; 2. Payload 구성 (Form Data String)
-        ; WorkLogData는 x-www-form-urlencoded 방식을 사용함
         payloadStr := "start=0&limit=25&forumId=4&I_ARWRK=5010"
             . "&I_ARBPL=" deptCode
             . "&I_WERKS=5010"
@@ -143,30 +141,37 @@ class HeadlessAutomation {
         url :=
             "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.erp.work_log.WorkLogData"
 
-        ; 3. 요청 전송 (Form Data 명시)
-        responseText := this._SendRequest(payloadStr, url, "application/x-www-form-urlencoded; charset=UTF-8")
+        ; 3. 요청 전송 및 재시도 로직 (최대 2회)
+        loop 2 {
+            responseText := this._SendRequest(payloadStr, url, "application/x-www-form-urlencoded; charset=UTF-8")
 
-        if (responseText == "") {
-            this._Log("일지 목록 조회 실패 (응답 없음)")
-            return ""
-        }
-
-        try {
-            resObj := JSON.parse(responseText)
-            if (resObj.Has("ZPM_RFC_REPORT_ZTPM1000_LIST")) {
-                list := resObj["ZPM_RFC_REPORT_ZTPM1000_LIST"]
-                if (list.Length > 0) {
-                    iljino := list[1]["ILJINO"]
-                    this._Log("일지번호 발견: " iljino)
-                    return iljino
+            if (responseText != "") {
+                try {
+                    resObj := JSON.parse(responseText)
+                    if (resObj.Has("ZPM_RFC_REPORT_ZTPM1000_LIST")) {
+                        list := resObj["ZPM_RFC_REPORT_ZTPM1000_LIST"]
+                        if (list.Length > 0) {
+                            iljino := list[1]["ILJINO"]
+                            this._Log("일지번호 발견 (" A_Index "회차): " iljino)
+                            return iljino
+                        }
+                    }
+                } catch as e {
+                    this._Log("일지번호 파싱 중 오류: " e.Message)
                 }
             }
-            this._Log("일지 목록이 비어있거나 파싱 실패")
-            return ""
-        } catch as e {
-            this._Log("일지번호 조회 중 오류: " e.Message)
-            return ""
+
+            ; 1차 실패 시 사용자에게 알린 후 1초 대기 후 재시도
+            if (A_Index == 1) {
+                this._Log("일지번호 조회 1차 실패. 사용자 알림 후 재시도 대기...")
+                LogDebug("[오류] 오늘자 업무일지 번호 조회 1차 실패 (MsgBox 표시)")
+                MsgBox("오늘자 업무일지 번호를 찾는 데 실패했습니다. (서버 지연 가능성)`n`n한 번 더 조회를 시도합니다", "일지번호 조회 실패", "Icon!")
+                Sleep 1000
+            }
         }
+
+        this._Log("일지 목록이 비어있거나, 응답 최종 실패")
+        return ""
     }
 
     ; ==============================================================================
@@ -180,7 +185,7 @@ class HeadlessAutomation {
     ; 공통 HTTP 요청 함수 (WinHttp API 사용)
     ; ==============================================================================
 
-    _SendRequest(payload, url, contentType := "") {
+    _SendRequest(payload, url, contentType := "", referer := "") {
         ; 1. URL 기반 도메인 판별 및 쿠키 선택
         domain := "ep" ; 기본값
         if InStr(url, "btcep.humetro.busan.kr")
@@ -200,11 +205,15 @@ class HeadlessAutomation {
         try {
             whr := ComObject("WinHttp.WinHttpRequest.5.1")
 
-            ; 3초 타임아웃 설정 (Resolve, Connect, Send, Receive)
-            whr.SetTimeouts(3000, 3000, 3000, 3000)
+            ; 5초 타임아웃 설정 (Resolve, Connect, Send, Receive)
+            whr.SetTimeouts(5000, 5000, 5000, 5000)
 
             ; 비동기 모드(true)로 열어야 WaitForResponse로 타임아웃 제어 가능
             whr.Open("POST", url, true)
+
+            ; HTTPS SSL 인증서 오류 무시
+            if InStr(url, "https://")
+                whr.Option[4] := 13056
 
             ; 2. Content-Type 결정 로직
             finalContentType := contentType
@@ -228,14 +237,24 @@ class HeadlessAutomation {
             ; 헤더 설정
             whr.SetRequestHeader("Content-Type", finalContentType)
             whr.SetRequestHeader("Cookie", cookie)
+            whr.SetRequestHeader("Accept", "application/json, text/javascript, */*; q=0.01")
             whr.SetRequestHeader("Accept-Language", "ko,en;q=0.9,en-US;q=0.8")
-            whr.SetRequestHeader("X-Requested-With", "XMLHttpRequest") ; AJAX 필수 헤더 추가 - 요청 실패시 주석 해제 검토
+            whr.SetRequestHeader("X-Requested-With", "XMLHttpRequest")
+            whr.SetRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0")
+
+            ; Referer/Origin 헤더 (CSRF 보호 통과용)
+            if (referer != "") {
+                whr.SetRequestHeader("Referer", referer)
+                ; Origin: scheme + host 추출
+                if RegExMatch(referer, "^(https?://[^/]+)", &m)
+                    whr.SetRequestHeader("Origin", m[1])
+            }
 
             ; Payload 전송
             whr.Send(finalPayload)
 
-            ; 3초 대기 (성공 시 -1 반환, 타임아웃 시 0 반환)
-            if (whr.WaitForResponse(3)) {
+            ; 5초 대기 (성공 시 -1 반환, 타임아웃 시 0 반환)
+            if (whr.WaitForResponse(5)) {
                 try {
                     ; ResponseBody 처리 (Binary -> UTF-8 String)
                     body := whr.ResponseBody
@@ -255,7 +274,7 @@ class HeadlessAutomation {
                     return ""
                 }
             } else {
-                this._Log("Error: 요청 시간 초과 (3초)")
+                this._Log("Error: 요청 시간 초과 (5초)")
                 return ""
             }
 
@@ -378,6 +397,131 @@ class HeadlessAutomation {
 
         return aufnrList
     }
+
+    ; ==============================================================================
+    ; 점검장소 목록 조회 (Import)
+    ; ==============================================================================
+    GetImportLocations(arbpl) {
+        this._Log("점검장소 목록 조회 요청 (" arbpl ", HTTP)...")
+
+        ; 날짜 계산
+        frDayStr := FormatTime(DateAdd(A_Now, -4, "days"), "yyyyMMdd")
+        toDayStr := FormatTime(DateAdd(A_Now, -1, "days"), "yyyyMMdd")
+
+        payload := Map(
+            "AJAX_TYPE", [Map(
+                "MODE", "OPN", "TYPE", "SPC", "RFC_NAME", "ZPM_RFC_REPORT_AFRU_LIST",
+                "I_ARBPL", arbpl, "I_WERKS", "5010", "I_FRDAY", frDayStr,
+                "I_FRTIME", "090000", "I_TODAY", toDayStr, "I_TOTIME", "085900"
+            )]
+        )
+
+        responseText := this._SendRequest(payload,
+            "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.erp.work_log.WorkLogDtlData",
+            "application/x-www-form-urlencoded")
+
+        locations := []
+        if (responseText == "") {
+            return locations
+        }
+
+        try {
+            result := JSON.parse(responseText)
+            if (result.Has("ZPM_RFC_REPORT_AFRU_LIST")) {
+                listData := result["ZPM_RFC_REPORT_AFRU_LIST"]
+                for item in listData {
+                    auart := item.Has("AUART") ? item["AUART"] : ""
+                    if !(auart == "PM01" || auart == "PM03")
+                        continue
+
+                    aufnr := item.Has("AUFNR") ? item["AUFNR"] : ""
+                    order := LTrim(aufnr, "0")
+
+                    ktext := item.Has("KTEXT") ? item["KTEXT"] : ""
+                    erdat := item.Has("ERDAT") ? item["ERDAT"] : ""
+
+                    erdatRaw := RegExReplace(erdat, "-")
+                    if (erdatRaw == "")
+                        erdatRaw := FormatTime(A_Now, "yyyyMMdd")
+
+                    ; 19990101 기준 일수 차이 계산 후 mod 3 + 1
+                    diffDays := DateDiff(erdatRaw, "19990101", "Days")
+                    groupNum := Mod(diffDays, 3) + 1
+
+                    typeStr := ""
+                    nameStr := ""
+                    isOther := false
+
+                    if (auart == "PM01") {
+                        if RegExMatch(ktext, "i)일일.*\((\d+)KV\).*?_([^-_]+)변전소", &match) {
+                            nameStr := match[2] . match[1]
+                            typeStr := "변전소"
+                        } else if RegExMatch(ktext, "i)_([^-_]+)전기실", &match) {
+                            nameStr := match[1]
+                            typeStr := "전기실(그룹" . groupNum . ")"
+                        } else {
+                            isOther := true
+                        }
+                    } else if (auart == "PM03") {
+                        isOther := true
+                    }
+
+                    if (isOther) {
+                        cleanText := RegExReplace(ktext, "i)[가-힣]+(분소|관리소|주재소)", "")
+                        cleanText := RegExReplace(cleanText, "i)일일|일상|점검|전차선로|\(|\)|_", "")
+                        cleanText := RegExReplace(cleanText, "\s+", " ")
+                        nameStr := Trim(cleanText)
+                        typeStr := "기타업무"
+                    }
+
+                    ; 중복 필터링은 프론트에서 처리하므로 전체 반환
+                    locations.Push(Map("name", nameStr, "type", typeStr, "order", order))
+                }
+            }
+        } catch as e {
+            this._Log("점검장소 파싱 오류: " e.Message)
+        }
+
+        return locations
+    }
+
+    ; ==============================================================================
+    ; 근태 조회 (btcep)
+    ; ==============================================================================
+    GetGuntae(codeVal, dateVal) {
+        this._Log("근태 조회 시작 (부서코드: " codeVal ", 날짜: " dateVal ")")
+
+        ; dateVal 형식: "yyyy-MM-dd"
+        payload := '{"codeVal":"' codeVal '","dateVal":"' dateVal '"}'
+
+        url := "https://btcep.humetro.busan.kr/main/getDeptDetail.face"
+
+        responseText := this._SendRequest(payload, url, "application/json; charset=UTF-8"
+            , "https://btcep.humetro.busan.kr/main/Geuntae.face")
+
+        if (responseText == "") {
+            this._Log("근태 조회 실패: 응답 없음")
+            return []
+        }
+
+        result := []
+        try {
+            data := JSON.parse(responseText)
+            for item in data {
+                result.Push(Map(
+                    "SABUN", item.Has("SABUN") ? item["SABUN"] : "",
+                    "NAME1", item.Has("NAME1") ? item["NAME1"] : "",
+                    "WORKTIME", item.Has("WORKTIME") ? item["WORKTIME"] : "",
+                    "GUNTAENAME", item.Has("GUNTAENAME") ? item["GUNTAENAME"] : ""
+                ))
+            }
+            this._Log("근태 조회 완료: " result.Length "명")
+        } catch as e {
+            this._Log("근태 파싱 오류: " e.Message)
+        }
+
+        return result
+    }
 }
 
 class BackgroundProcessManager {
@@ -401,6 +545,7 @@ class BackgroundProcessManager {
         ; 1. Stdout 파이프 생성 (Child Write -> Parent Read)
         hReadOut := 0, hWriteOut := 0
         if !DllCall("CreatePipe", "PtrP", &hReadOut, "PtrP", &hWriteOut, "Ptr", sa, "UInt", 0) {
+            LogDebug("[오류] Stdout 파이프 생성 실패 (MsgBox 표시)")
             MsgBox("Stdout 파이프 생성 실패")
             return false
         }
@@ -413,6 +558,7 @@ class BackgroundProcessManager {
         ; 2. Stdin 파이프 생성 (Parent Write -> Child Read)
         hReadIn := 0, hWriteIn := 0
         if !DllCall("CreatePipe", "PtrP", &hReadIn, "PtrP", &hWriteIn, "Ptr", sa, "UInt", 0) {
+            LogDebug("[오류] Stdin 파이프 생성 실패 (MsgBox 표시)")
             MsgBox("Stdin 파이프 생성 실패")
             this.Cleanup()
             return false
@@ -435,6 +581,7 @@ class BackgroundProcessManager {
 
         if !DllCall("CreateProcess", "Ptr", 0, "Str", cmdLine, "Ptr", 0, "Ptr", 0, "Int", 1, "UInt", 0x08000000, "Ptr",
             0, "Ptr", 0, "Ptr", si, "Ptr", pi) {
+            LogDebug("[오류] 프로세스 생성 실패 (MsgBox 표시). cmdLine: " cmdLine)
             MsgBox("프로세스 생성 실패")
             this.Cleanup()
             return false
@@ -522,6 +669,17 @@ class BackgroundProcessManager {
 
     static Cleanup() {
         SetTimer ObjBindMethod(this, "CheckOutput"), 0
+
+        if (this.hProcess) {
+            exitCode := 0
+            ; 프로세스가 여전히 실행 중(STILL_ACTIVE = 259)인지 확인
+            if DllCall("GetExitCodeProcess", "Ptr", this.hProcess, "UIntP", &exitCode) {
+                if (exitCode == 259) {
+                    ; 프로세스 강제 종료 (ExitCode 1 반환)
+                    DllCall("TerminateProcess", "Ptr", this.hProcess, "UInt", 1)
+                }
+            }
+        }
 
         if (this.hReadPipe) {
             DllCall("CloseHandle", "Ptr", this.hReadPipe)

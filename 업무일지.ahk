@@ -1,5 +1,48 @@
 #Requires AutoHotkey v2.0
 
+; --------------------------------------------------------------------------
+; 공공데이터포털 공휴일 API 조회
+; 오늘이 공휴일인지 확인하여 true/false 반환
+; --------------------------------------------------------------------------
+IsHoliday() {
+    static cached := Map()  ; "YYYYMMDD" -> true/false 캐시
+    today := FormatTime(, "yyyyMMdd")
+    if cached.Has(today)
+        return cached[today]
+
+    year := FormatTime(, "yyyy")
+    month := FormatTime(, "MM")
+    serviceKey := "440932145a09ac077626e96b6b69172916fb8adea8324d917da8e75c3a1231b9"
+    url := "http://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService/getRestDeInfo"
+    url .= "?serviceKey=" serviceKey "&solYear=" year "&solMonth=" month "&_type=json"
+
+    try {
+        whr := ComObject("WinHttp.WinHttpRequest.5.1")
+        whr.Open("GET", url, true)
+        whr.Send()
+        whr.WaitForResponse(5)  ; 최대 5초 대기
+
+        responseText := whr.ResponseText
+
+        ; JSON에서 locdate 값들을 찾아 오늘 날짜와 비교
+        ; 정규식으로 "locdate":YYYYMMDD 패턴을 모두 추출
+        pos := 1
+        while (pos := RegExMatch(responseText, '"locdate"\s*:\s*(\d{8})', &match, pos)) {
+            if (match[1] == today) {
+                cached[today] := true
+                return true
+            }
+            pos += match.Len
+        }
+
+        cached[today] := false
+        return false
+    } catch {
+        ; API 호출 실패 시 공휴일이 아닌 것으로 간주
+        return false
+    }
+}
+
 class WorkLogManager {
     static BaseDate := "20260101"   ; 기준일
 
@@ -101,11 +144,10 @@ class WorkLogManager {
 
         idx := Mod(diff, 4) + 1 ; 1부터 시작하는 인덱스
 
-        if (isNight) {
+        if (isNight)
             return this.NightShiftOrder[idx]
-        } else {
+        else
             return this.DayShiftOrder[idx]
-        }
     }
 }
 
@@ -162,7 +204,9 @@ class workers {
         ; 1. 스케줄 설정 (app.js: workType="day"/"night")
         this.schedule := (data.Has("workType") && data["workType"] == "day") ? "주간" : "야간"
         this.day := (this.schedule == "주간")
-        this.weekday := (this.schedule == "주간")
+        ; weekday(평일) 판단: 주간 스케줄 + 토/일 아님 + 공휴일 아님
+        isWeekend := (A_WDay == 1 || A_WDay == 7)  ; 1=일요일, 7=토요일
+        this.weekday := (this.schedule == "주간") && !isWeekend && !IsHoliday()
 
         ; 2. 작업자 및 운전원 초기화
         workerList := data.Has("workers") ? data["workers"] : []
@@ -317,6 +361,7 @@ class workers {
 
             }
         } catch as e {
+            LogDebug("[오류] 인원 파악 중 오류: " e.Message)
             MsgBox("인원 파악 중 오류: " e.Message)
             OnExitApp()
         }
@@ -397,7 +442,8 @@ class RunWorkLog {
             if this.EnsureReady("WorkLog_Create")
                 this.CreateLog()
             else {
-                MsgBox("일지 생성 준비에 실패하였습니다.", "알림", "IconStop")
+                LogDebug("[오류] 일지 생성 준비 실패")
+                MsgBox("일지 생성 준비에 실패하였습니다.", "알림", "Iconx")
                 StopMacro()
                 return false
             }
@@ -408,7 +454,8 @@ class RunWorkLog {
             if this.cUIA or this.EnsureReady("WorkLog_View")
                 this.GeneralWork()
             else {
-                MsgBox("일지 조회 준비에 실패하였습니다.", "알림", "IconStop")
+                LogDebug("[오류] 일지 조회 준비 실패 (일반업무)")
+                MsgBox("일지 조회 준비에 실패하였습니다.", "알림", "Iconx")
                 StopMacro()
                 return false
             }
@@ -419,7 +466,8 @@ class RunWorkLog {
             if this.cUIA or this.EnsureReady("WorkLog_View")
                 this.SafeManage()
             else {
-                MsgBox("일지 조회 준비에 실패하였습니다.", "알림", "IconStop")
+                LogDebug("[오류] 일지 조회 준비 실패 (안전관리)")
+                MsgBox("일지 조회 준비에 실패하였습니다.", "알림", "Iconx")
                 StopMacro()
                 return false
             }
@@ -430,7 +478,8 @@ class RunWorkLog {
             if this.cUIA or this.EnsureReady("WorkLog_View")
                 this.DrivingCheck()
             else {
-                MsgBox("일지 조회 준비에 실패하였습니다.", "알림", "IconStop")
+                LogDebug("[오류] 일지 조회 준비 실패 (운전적합성)")
+                MsgBox("일지 조회 준비에 실패하였습니다.", "알림", "Iconx")
                 StopMacro()
                 return false
             }
@@ -449,7 +498,14 @@ class RunWorkLog {
 
     CreateLog() {
 
-        approver := this.workers.approver ? this.workers.approver : InputBox("분소장 성함")
+        if this.workers.approver
+            approver := this.workers.approver
+        else {
+            LogDebug("[오류] 분소장(승인자)가 설정되지 않음")
+            MsgBox "설정 -> 작업자 메뉴에서 분소장을 지정 후 시작해 주세요"
+            return false
+        }
+
         nightMaker := this.workers.nightMaker ? this.workers.nightMaker : InputBox("야간 작성자 성함")
         nightChecker := this.workers.nightChecker ? this.workers.nightChecker : InputBox("야간 승인자 성함")
 
@@ -512,8 +568,30 @@ class RunWorkLog {
     }
 
     GeneralWork() {
-        safeContents := ["안전 확보 요강 및 기타 작업에 필요한 사항 등", "안전보건 11대 수칙", "전기원 안전수칙", "일반전기작업 안전수칙", "시설물 안전점검 수칙",
-            "작업장 내 정리 정돈 안전 수칙", "사다리 작업 및 정전작업 요령"]
+        uid := ConfigManager.GetCurrentUserID()
+        userRoot := ConfigManager.GetUserRoot(uid)
+
+        presetList := []
+        if (userRoot.Has("dailyLogDefaults") && userRoot["dailyLogDefaults"].Has("generalWork")) {
+            for preset in userRoot["dailyLogDefaults"]["generalWork"] {
+                if (preset.Has("workType") && InStr(this.workers.schedule, preset["workType"])) {
+                    presetList.Push(preset)
+                }
+            }
+        }
+        presetCount := presetList.Length
+
+        days := ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        dayKey := days[A_WDay]
+        safeEduContent := ""
+        if (this.data.Has("safetyEdu") && this.data["safetyEdu"].Has(dayKey) && this.data["safetyEdu"][dayKey] != "") {
+            safeEduContent := this.data["safetyEdu"][dayKey]
+        } else {
+            ; Fallback defaults if config is missing
+            fallbackContents := ["안전 확보 요강 및 기타 작업에 필요한 사항 등", "안전보건 11대 수칙", "전기원 안전수칙", "일반전기작업 안전수칙", "시설물 안전점검 수칙",
+                "작업장 내 정리 정돈 안전 수칙", "사다리 작업 및 정전작업 요령"]
+            safeEduContent := fallbackContents[A_WDay]
+        }
 
         menuClick(this.cUIA, "일반업무")							;메뉴진입
 
@@ -525,6 +603,50 @@ class RunWorkLog {
             table.FindElement({ AutomationId: "I_INGYEP" }).value := this.workers.firstworker
             table.FindElement({ AutomationId: "I_INSUP" }).value := this.workers.handover
             table.FindElement({ AutomationId: "I_ITEXT" }).value := "특이사항 없음."
+
+            ;일반업무
+            if (presetCount > 0) {
+                loop presetCount - 1 { ;프리셋 항목 수 - 1 개 만큼 '추가' 클릭
+                    this.cUIA.FindElement({ AutomationId: "btnAdd10" }).Invoke()
+                    Sleep 100
+                }
+                Sleep 250
+
+                table := this.cUIA.FindElement({ AutomationId: "tb10" })
+                rows := table.FindAll({ LocalizedType: "행" })
+                loop presetCount { ;프리셋 항목 수 만큼 루프
+                    row := rows[A_Index + 1]
+                    preset := presetList[A_Index]
+
+                    ;점검항목
+                    if preset.Has("category") and preset["category"] != "전체" {
+                        comboBox := row.WaitElement({ AutomationId: "I_WGUBUN", mm: 1 }, 50)
+                        comboBox.expand()
+                        Sleep 50
+                        comboBox.WaitElement({ Name: preset.Has("category") ? preset["category"] : "점검업무" }, 3000).invoke()
+                        Sleep 100
+                        comboBox.collapse()
+                    }
+
+                    if preset.Has("content")
+                        row.WaitElement({ AutomationId: "I_WTEXT", mm: 1 }, 50).value := preset["content"]
+                    if preset.Has("manager")
+                        row.WaitElement({ AutomationId: "I_WSARAM", mm: 1 }, 50).value := preset["manager"]
+
+                    row.WaitElement({ AutomationId: "I_WQTY", mm: 1 }, 50).value := this.workers.workersArray.length
+
+                    if preset.Has("start") {
+                        row.WaitElement({ AutomationId: "I_STARTDAY", mm: 1 }, 50).value := FormatTime(, "yyyy-MM-dd")   ;시작날짜
+                        row.WaitElement({ AutomationId: "I_STARTTIME", mm: 1 }, 50).value := preset["start"]   ;시작시간
+                    }
+
+                    if preset.Has("end") {
+                        row.WaitElement({ AutomationId: "I_ENDDAY", mm: 1 }, 50).value := FormatTime(, "yyyy-MM-dd")   ;종료날짜
+                        row.WaitElement([{ AutomationId: "I_EDTIME", mm: 1 }, { AutomationId: "I_ENDTIME", mm: 1 }], 50
+                        ).value := preset["end"]   ;종료시간
+                    }
+                }
+            }
 
             ;안전의날(매주금요일)/안전점검의날(매월4일)
             if A_DD == 4 or A_DDD == "금" {
@@ -553,6 +675,59 @@ class RunWorkLog {
             table.FindAll({ AutomationId: "I_INSUP" })[2].value := this.workers.handover
             table.FindAll({ AutomationId: "I_ITEXT" })[2].value := "특이사항 없음."
 
+            ;일반업무
+            if (presetCount > 0) {
+                loop presetCount { ;프리셋 항목 수 만큼 '추가' 클릭
+                    this.cUIA.FindElement({ AutomationId: "btnAdd10" }).Invoke()
+                    Sleep 100
+                }
+                table := this.cUIA.FindElement({ AutomationId: "tb10" })
+                rows := table.FindAll({ LocalizedType: "행" })
+                loop presetCount {  ;프리셋 항목수 만큼 루프
+                    n := rows.Length - presetCount + A_Index - 1
+                    row := rows[n + 1]
+                    preset := presetList[A_Index]
+
+                    ;점검항목
+                    comboBox := row.WaitElement({ AutomationId: "I_WGUBUN", mm: 1 }, 50)
+                    comboBox.expand()
+                    Sleep 50
+                    comboBox.WaitElement({ Name: preset.Has("category") ? preset["category"] : "점검업무" }, 3000).invoke()
+                    Sleep 100
+                    comboBox.collapse()
+
+                    if preset.Has("content")
+                        row.WaitElement({ AutomationId: "I_WTEXT", mm: 1 }, 50).value := preset["content"]
+                    if preset.Has("manager")
+                        row.WaitElement({ AutomationId: "I_WSARAM", mm: 1 }, 50).value := preset["manager"]
+
+                    row.WaitElement({ AutomationId: "I_WQTY", mm: 1 }, 50).value := this.workers.workersArray.length
+
+                    if preset.Has("start") {
+
+                        if (SubStr(preset["start"], 1, 2) + 0) <= 9
+                            startDay := FormatTime(DateAdd(A_Now, 1, "Days"), "yyyy-MM-dd")
+                        else
+                            startDay := FormatTime(, "yyyy-MM-dd")
+
+                        row.WaitElement({ AutomationId: "I_STARTDAY", mm: 1 }, 50).value := startDay   ;시작날짜
+                        row.WaitElement({ AutomationId: "I_STARTTIME", mm: 1 }, 50).value := preset["start"]   ;시작시간
+                    }
+
+                    if preset.Has("end") {
+
+                        if (SubStr(preset["end"], 1, 2) + 0) <= 9
+                            endDay := FormatTime(DateAdd(A_Now, 1, "Days"), "yyyy-MM-dd")
+                        else
+                            endDay := FormatTime(, "yyyy-MM-dd")
+
+                        row.WaitElement({ AutomationId: "I_ENDDAY", mm: 1 }, 50).value := endDay   ;종료날짜
+                        row.WaitElement([{ AutomationId: "I_EDTIME", mm: 1 }, { AutomationId: "I_ENDTIME", mm: 1 }], 50
+                        ).value := preset["end"]   ;종료시간
+                    }
+                }
+            }
+
             ;교육사항
             this.cUIA.FindElement({ AutomationId: "btnAdd7" }).Invoke()
             sleep 250
@@ -577,27 +752,28 @@ class RunWorkLog {
         if this.workers.absentCnt
             row.WaitElement({ AutomationId: "I_NTATTQTY", mm: 1 }, 50).value := this.workers.absentCnt
         row.WaitElement({ AutomationId: "I_SAYU", mm: 1 }, 50).value := this.workers.getReasons()
-        row.WaitElement({ AutomationId: "I_NAEYONG", mm: 1 }, 50).value := safeContents[A_WDay]
+        row.WaitElement({ AutomationId: "I_NAEYONG", mm: 1 }, 50).value := safeEduContent
 
         ;기타사항 음주
         chkDrink := this.data.Has("chkDrinkDetect") ? this.data["chkDrinkDetect"] : false
         if InStr(this.workers.schedule, "주간") && chkDrink {
-            ;기타사항 한줄 추가
-            this.cUIA.FindElement({ AutomationId: "btnAdd8" }).Invoke()
-            Sleep 250
+            ;기타사항 한줄 추가 - 필요시 주석 해제
+            ;this.cUIA.FindElement({ AutomationId: "btnAdd8" }).Invoke()
+            ;Sleep 250
+
             ;교정 여부
-            chkCalib := this.data.Has("chkDrinkDetectorCalibration") ? this.data["chkDrinkDetectorCalibration"] :
-                false
+            chkCalib := this.data.Has("chkDrinkDetectorCalibration") ? this.data["chkDrinkDetectorCalibration"] : false
             drinkDetector := chkCalib ? "음주육안검사" : "음주감지기"
 
-            table := this.cUIA.WaitElement({ AutomationId: "tb7" })
+            table := this.cUIA.WaitElement({ AutomationId: "tb8" })
+            rows := this.cUIA.FindElement({ AutomationId: "tb8" }).Findall({ LocalizedType: "행" })
 
             ;첫째줄
-            table.FindAll({ AutomationId: "I_NAEYONG" })[1].value := "음주측정 : 검사시행자(" this.workers.tutor "), 일시(" A_YYYY "." A_MM "." A_DD " 09:10), 대상자(" this
-            .workers.drinkAttendees ") - " drinkDetector ", 정상"
-            ;둘째줄
-            table.FindAll({ AutomationId: "I_NAEYONG" })[2].value := "음주측정 : 검사시행자(" this.workers.secondChecker "), 일시(" A_YYYY "." A_MM "." A_DD " 09:10), 대상자(" this
-            .workers.tutor ") - " drinkDetector ", 정상"
+            ;row[1].WaitElement({ AutomationId: "I_NAEYONG", mm: 1 }).value := "음주측정 : 검사시행자(" this.workers.tutor "), 일시(" A_YYYY "." A_MM "." A_DD " 09:10), 대상자(" this
+            ;.workers.drinkAttendees ") - " drinkDetector ", 정상"
+            rows[2].WaitElement({ AutomationId: "I_NAEYONG", mm: 1 }, 50).value := "주간 근무자 음주관련 검사 실시 : 1. 검사시행자 : " this.workers.tutor " 2. 시간 : 09:10 3. 대상자 : " this.workers.tutor ", " this.workers.drinkAttendees " 4. 검사결과 : 이상없음"
+            ;둘째줄 - 필요 시 주석 해제
+            ;table.FindAll({ AutomationId: "I_NAEYONG" })[2].value := "음주측정 : 검사시행자(" this.workers.secondChecker "), 일시(" A_YYYY "." A_MM "." A_DD " 09:10), 대상자(" this.workers.tutor ") - " drinkDetector ", 정상"
         }
 
         ;저장
@@ -674,8 +850,17 @@ class RunWorkLog {
 
                 loop 4 {
 
-                    rows[NA[A_Index] + 1].WaitElement({ AutomationId: "I_DAYCHECK" }, 100).setFocus()
-                    this.cUIA.send("{up 2}")
+                    ;rows[NA[A_Index] + 1].WaitElement({ AutomationId: "I_DAYCHECK" }, 100).setFocus()
+                    ;this.cUIA.send("{up 2}")
+
+                    ;콤보박스 직접제어 개선버전
+                    comboBox := rows[NA[A_Index] + 1].WaitElement({ AutomationId: "I_DAYCHECK" }, 100)
+                    comboBox.expand()
+                    Sleep 75
+                    comboBox.WaitElement({ Name: "N/A" }, 3000).invoke()
+                    Sleep 125
+                    comboBox.collapse()
+                    Sleep 50
                 }
             }
         }

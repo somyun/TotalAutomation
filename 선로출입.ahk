@@ -1,6 +1,7 @@
 ; RunTrackAccess - 선로출입관리 자동 입력 매크로
 ; data: Frontend에서 전달받은 JSON 객체
 RunTrackAccess(data) {
+
     if !data
         return
 
@@ -231,19 +232,75 @@ RunTrackAccess(data) {
     ; (23) 철도운행협의서
     SendSleep("{tab 5}", 100)
     if 모터카 { ;모터카 출고시
-        SendSleep("{enter}", 100)
+        SendSleep("{enter}", 200)
         if !hwnd := WinWaitActive("철도운행안전협의", , 3)
             MsgBox "철도운행안전협의 선택창 오류"
 
-        MsgBox "철도운행안전협의서를 선택해 주세요", "선로출입관리", "iconi"
-        /* 최적화된 매크로 로직 구현 후 주석 해제
-        Sleep 100
-        SendSleep("{tab 3}", 100)
-        SendSleep("{down}", 100)
-        SendSleep("{tab}", 100)
-        SendSleep("{enter}", 100)
-        */
+        ; OCR로 협의번호 행 찾기
+        targetNo := data.Has("agreementNo") ? data["agreementNo"] : ""
+        n := 0
+        if (targetNo != "") {
+            WinGetPos(&winX, &winY, &winW, &winH, "ahk_id " hwnd)
+            relX := 10, relY := 70, colW := 70, colH := winH - 90
+            cleanTarget := StrReplace(targetNo, ",", "")
+
+            pToken := Gdip_Startup()
+            ocrLines := []
+            ; 리스트 로드 대기: 0.5초 간격, 최대 10초(20회)
+            loop 20 {
+                pBitmap := Gdip_BitmapFromScreen((winX + relX) "|" (winY + relY) "|" colW "|" colH)
+                if pBitmap {
+                    ScaleBitmap(&pBitmap, 6)
+                    ocrResult := OCR.FromBitmap(pBitmap, { lang: "ko-KR", scale: 1, monochrome: 180 })
+                    ocrLines := StrSplit(StrReplace(ocrResult.text, " ", "`n"), "`n")
+                    Gdip_DisposeImage(pBitmap)
+                    if (ocrLines.Length >= 10)
+                        break
+                }
+                Sleep 500
+            }
+            Gdip_Shutdown(pToken)
+
+            ; 리스트 로드 완료 후 매칭
+            for idx, line in ocrLines {
+                if (InStr(StrReplace(line, ",", ""), cleanTarget)) {
+                    n := idx - 1
+                    break
+                }
+            }
+        }
+
+        ; 미입력 / OCR 실패 분기
+        if (targetNo == "") {
+            needsManual := true
+            MsgBox "철도운행안전협의서를 선택해 주세요.`n협의번호를 반드시 확인해 주세요.", "통합자동화", "icon!"
+        } else if (n == 0) {
+            needsManual := true
+            MsgBox "협의번호를 자동으로 찾지 못했습니다.`n직접 선택 후 확인을 눌러주세요.", "통합자동화", "icon!"
+        } else {
+            needsManual := false
+            Sleep 100
+            SendSleep("{tab 3}", 100)
+            SendSleep("{down " n "}", 100)
+            SendSleep("{tab}", 100)
+            SendSleep("{enter}", 100)
+        }
+
         WinWaitClose(hwnd)
+
+        ; 수동 선택 시 InputBox로 협의번호 입력받아 프리셋/UI에 반영
+        if needsManual {
+            needsRenewal := data.Has("needsRenewal") ? data["needsRenewal"] : false
+            prompt := needsRenewal
+                ? "갱신된 협의서의 협의번호를 입력해 주세요"
+                    : "확인한 협의번호를 입력해 주세요"
+            ib := InputBox(prompt, "통합자동화", "w280 h120")
+            if (ib.Result == "OK" && ib.Value != "") {
+                payload := Map("type", "updateAgreementNo", "value", ib.Value)
+                wv.PostWebMessageAsJson(JSON.stringify(payload))
+            }
+            Sleep 250
+        }
     }
 
     ; (24) 운행to
@@ -343,4 +400,18 @@ WinWaitActiveTime(winTitle, millisecondsToWait, checkInterval := 50) {
         }
         Sleep(checkInterval)
     }
+}
+
+ScaleBitmap(&pBitmap, scale := 2) {
+    width := Gdip_GetImageWidth(pBitmap)
+    height := Gdip_GetImageHeight(pBitmap)
+    newW := width * scale
+    newH := height * scale
+    pNewBitmap := Gdip_CreateBitmap(newW, newH)
+    G := Gdip_GraphicsFromImage(pNewBitmap)
+    Gdip_SetInterpolationMode(G, 7)
+    Gdip_DrawImage(G, pBitmap, 0, 0, newW, newH, 0, 0, width, height)
+    Gdip_DeleteGraphics(G)
+    Gdip_DisposeImage(pBitmap)
+    pBitmap := pNewBitmap
 }

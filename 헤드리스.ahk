@@ -116,8 +116,20 @@ class HeadlessAutomation {
     ; 금일 일지 번호 조회 (HTTP)
     ; ==============================================================================
     GetTodayWorkLogNumber(sabun, deptCode, targetDate := "") {
-        if (targetDate == "")
+
+        if (targetDate == "") {
+        ; 로그인 유저의 근무조를 기반으로 근무기준일 결정
+        userTeam := ConfigManager.CurrentUser.Has("team")
+                    ? ConfigManager.CurrentUser["team"] : ""
+
+        if (userTeam != "") {
+            context := WorkLogManager.GetCurrentContext(userTeam)
+            targetDate := context["date"]  ; 근무기준일 반환
+        } else {
+            ; 팀 정보 없을 때만 기존 로직 폴백
             targetDate := FormatTime(DateAdd(A_Now, -9, "Hours"), "yyyyMMdd")
+        }
+    }
 
         this._Log("일지 번호 조회 시작... (" targetDate ", " deptCode ")")
 

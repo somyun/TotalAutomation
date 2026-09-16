@@ -174,6 +174,21 @@ select {
     background: #fafafa;
     padding: 10px 0;
     flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.settings-cloud-actions {
+    margin-top: auto;
+    padding: 16px 20px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.settings-cloud-actions button {
+    width: 100%;
+    min-height: 38px;
 }
 
 .settings-content-area {
@@ -751,6 +766,163 @@ h1 {
     gap: 10px;
 }
 
+/* ERP Batch Mode Layout */
+.erp-batch-layout {
+    display: flex;
+    flex-direction: column;
+    padding: 10px;
+    height: 100%;
+    overflow-y: auto;
+}
+
+.erp-batch-table {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    background: #fff;
+}
+
+.erp-batch-header-row {
+    display: flex;
+    background-color: #f5f5f5;
+    border-bottom: 2px solid #ddd;
+    font-weight: bold;
+    font-size: 13px;
+    color: #333;
+}
+
+.batch-col-header {
+    flex: 1;
+    padding: 10px;
+    text-align: center;
+    border-right: 1px solid #e0e0e0;
+}
+
+.batch-col-header.loc-col {
+    flex: 1.5;
+    /* location column is slightly wider */
+}
+
+.batch-col-header:last-child {
+    border-right: none;
+}
+
+.erp-batch-body {
+    display: flex;
+    flex-direction: column;
+}
+
+.erp-batch-row {
+    display: flex;
+    border-bottom: 1px solid #eee;
+    transition: background-color 0.2s;
+}
+
+.erp-batch-row:last-child {
+    border-bottom: none;
+}
+
+.erp-batch-row:hover {
+    background-color: #f9f9f9;
+}
+
+.erp-batch-cell {
+    flex: 1;
+    padding: 3px;
+    /* Reduced from 8px to minimize height */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-right: 1px solid #eee;
+}
+
+/* Category column (Type) */
+.batch-col-header.type-col,
+.erp-batch-cell.type-col {
+    flex: 0 0 75px;
+    /* 약간 넓힘 (구분 열) */
+}
+
+.erp-batch-cell.type-col {
+    color: #555;
+    font-size: 13px;
+    /* 헤더 스타일과 톤 앤 매너 통일 */
+    font-weight: 500;
+}
+
+/* 1열 병합 느낌을 주기 위해 위쪽 테두리를 없애는 유틸 (Vue에서 bind) */
+.erp-batch-cell.type-col.hide-border {
+    border-top: none;
+    color: transparent;
+    /* 글자 숨김 */
+}
+
+.batch-col-header.loc-col,
+.erp-batch-cell.loc-col {
+    flex: 0 0 130px;
+    /* 점검장소 텍스트 두 줄 방지 위해 넓이 강제 확보 */
+}
+
+/* Merged Workers Group column */
+.batch-col-header.workers-group-header,
+.erp-batch-cell.workers-group-cell {
+    flex: 1;
+    /* Take up all remaining space */
+}
+
+.erp-batch-cell.workers-group-cell {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+    /* 점검자 버튼들 중앙 정렬 피드백 반영 */
+    align-items: center;
+}
+
+.erp-batch-cell:last-child {
+    border-right: none;
+}
+
+/* Button style overrides for batch mode */
+.erp-batch-cell .erp-btn {
+    width: auto;
+    min-width: 48px;
+    /* Fit 3 chars */
+    min-height: 28px;
+    margin: 0;
+    padding: 2px 5px;
+    font-size: 13px;
+    letter-spacing: -0.5px;
+    flex: 1;
+    /* (피드백) 셀 내부에서 꽉 차게 수정 */
+    white-space: nowrap;
+    /* (피드백) 텍스트 두 줄 내려짐 방지 */
+}
+
+.erp-batch-cell.workers-group-cell .erp-btn {
+    flex: 0 0 auto;
+    /* 점검자 버튼은 텍스트 길이에 맞추고 꽉 차지 않게 함 */
+}
+
+/* Fix CSS Specificity for selected state when not disabled */
+#erp-batch-container .erp-batch-cell .erp-btn.selected {
+    background-color: var(--primary-color) !important;
+    color: white !important;
+    font-weight: bold !important;
+    border-color: var(--primary-color) !important;
+}
+
+/* Disabled worker buttons in batch mode */
+#erp-batch-container .erp-batch-cell .erp-btn[disabled] {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background-color: #f0f0f0;
+    border-color: #ddd;
+    color: #aaa;
+}
+
 /* Worker Format Toggle in Footer */
 .worker-format-toggle-container {
     display: flex;
@@ -843,6 +1015,46 @@ input:checked+.slider:before {
 
 .worker-checkbox-item input[type="checkbox"] {
     cursor: pointer;
+}
+
+/* --- ERP Batch Modal Styles --- */
+.batch-confirm-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 20px;
+    max-height: 250px;
+    overflow-y: auto;
+    font-size: 0.95em;
+    padding: 10px;
+    background-color: #f9f9f9;
+    border-radius: 8px;
+    border: 1px solid #eee;
+}
+
+.batch-confirm-item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+}
+
+.batch-confirm-loc {
+    font-weight: bold;
+    color: #1976D2;
+    white-space: pre; /* 스페이스 유지 중요 */
+    text-align: right;
+}
+
+.batch-confirm-dash {
+    color: #666;
+    margin: 0 5px;
+}
+
+.batch-confirm-workers {
+    color: #333;
+    white-space: pre;
+    text-align: left;
 }
 
 .modal-option-row {
@@ -2238,4 +2450,29 @@ input:checked+.slider:before {
     border: 1px solid #ccc;
     border-radius: 4px;
     flex: 0 0 80px;
+}
+
+/* Session Status Overlay */
+.session-overlay {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    background-color: rgba(226, 226, 226, 0.95);
+    color: #555;
+    padding: 4px 10px;
+    font-size: 13px;
+    border-top-right-radius: 6px;
+    box-shadow: 2px -2px 5px rgba(0,0,0,0.1);
+    z-index: 10000;
+    opacity: 0;
+    transition: opacity 1.5s ease-in-out;
+    pointer-events: none;
+    border: 1px solid #ccc;
+    border-bottom: none;
+    border-left: none;
+}
+
+.session-overlay.show {
+    opacity: 1;
+    transition: opacity 0.2s ease-in-out; /* fast show */
 }

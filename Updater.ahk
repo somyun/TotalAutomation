@@ -50,7 +50,7 @@ try {
 
     ; Safety Mode Check
     mode := (!FileExist(mainExe) && FileExist(mainAhk)) ? "Development" : "Production"
-    repo := "MyungjinSong/TotalAutomation"
+    repo := "somyun/TotalAutomation"
     currentVer := GetLocalVersion()
 
     ; 1. INTERNET CHECK
@@ -133,7 +133,7 @@ try {
 
     } else {
         ; API Failed or Limit
-        MsgBox("업데이트 정보를 받아올 수 없습니다")
+        MsgBox("업데이트 정보를 받아올 수 없습니다" )
         if (UpdateGui != "")
             UpdateGui.Destroy()
 
@@ -251,16 +251,21 @@ GetLocalVersion() {
 }
 
 GetLatestRelease(repo) {
-    url := "https://api.github.com/repos/" repo "/releases/latest"
     try {
+        url := "https://api.github.com/repos/" repo "/releases/latest"
         whr := ComObject("WinHttp.WinHttpRequest.5.1")
         whr.Open("GET", url, true)
         whr.SetRequestHeader("User-Agent", "AutoHotkey")
         whr.Option[4] := 13056
         whr.Send()
         whr.WaitForResponse()
+
         if (whr.Status == 200)
             return JSON.parse(whr.ResponseText)
+        else if InStr(whr.ResponseText, "API") {
+            Run(mainExe " /skipupdate")
+            ExitApp
+        }
     }
     return ""
 }

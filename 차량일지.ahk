@@ -8,6 +8,7 @@ RunVehicleLog(data) {
 
     ; --- 1. 브라우저/로그인 확인 ---
     if !cUIA := WebAutoLogin.EnsureReady("WorkLog_View") {
+        LogDebug("[오류] cUIA 반환 실패 (RunVehicleLog)")
         MsgBox "cUIA 반환 실패"
         return
     }
@@ -21,11 +22,13 @@ RunVehicleLog(data) {
     try {
         cUIA.WaitElement({ Name: "추가 조회 삭제" }).WaitElement({ AutomationId: "btnReg" }, 3000).Invoke()
     } catch {
+        LogDebug("[오류] 차량일지 등록 버튼을 찾을 수 없음")
         MsgBox("차량일지 등록 버튼을 찾을 수 없습니다.")
         return
     }
 
     if !WinWaitNotActive(thisId, , 5) {
+        LogDebug("[오류] 차량일지 추가 페이지 오픈 실패 Timeout")
         MsgBox("차량일지 추가 페이지 오픈 실패 Timeout")
         return
     }
@@ -39,6 +42,7 @@ RunVehicleLog(data) {
     cUIA.WaitElement({ Type: "Image", Name: "차량번호" }, 3000).Invoke()
 
     if !WinWaitNotActive(carPage, , 5) {
+        LogDebug("[오류] 차량선택 페이지 오픈 실패 Timeout")
         MsgBox("차량선택 페이지 오픈 실패 Timeout")
         ExitApp
     }
@@ -54,6 +58,7 @@ RunVehicleLog(data) {
     cUIA.WaitElement({ Type: "Image", Name: "작업장" }, 3000, , index := 2).Invoke()
 
     if !WinWaitNotActive(carPage, , 5) {
+        LogDebug("[오류] 작업장 페이지 오픈 실패 Timeout")
         MsgBox("작업장 페이지 오픈 실패 Timeout")
         ExitApp
     }
@@ -67,7 +72,8 @@ RunVehicleLog(data) {
     Sleep 250
     cUIA_Sub.send "{enter}"
     Sleep 250
-    cUIA_Sub.FindElement({ LocalizedType: "텍스트", Name: data["department"] }).ControlClick()
+    try
+        cUIA_Sub.FindElement({ LocalizedType: "텍스트", Name: data["department"] }).ControlClick()
 
     ;운전자
     cUIA.WaitElement({ Type: "Image", Name: "요청인" }, 3000, , index := 2).Invoke()
@@ -77,6 +83,7 @@ RunVehicleLog(data) {
     cUIA.FindAll({ Type: "Image", Name: "위치" })[1].Invoke()
 
     if !WinWaitNotActive(carPage, , 5) {
+        LogDebug("[오류] 작업시점 페이지 오픈 실패 Timeout (1차)")
         MsgBox("작업시점 페이지 오픈 실패 Timeout")
         ExitApp
     }
@@ -98,6 +105,7 @@ RunVehicleLog(data) {
     cUIA.FindAll({ Type: "Image", Name: "위치" })[2].Invoke()
 
     if !WinWaitNotActive(carPage, , 5) {
+        LogDebug("[오류] 작업시점 페이지 오픈 실패 Timeout (2차)")
         MsgBox("작업시점 페이지 오픈 실패 Timeout")
         ExitApp
     }
@@ -168,165 +176,55 @@ RunVehicleLog(data) {
 }
 
 bringApproval(data) {
+    global wv
 
-    own_id := WinExist("A")
-
-    ; --- 1. 브라우저/로그인 확인 ---
-    if !cUIA := WebAutoLogin.EnsureReady("SessionCheck") {
-        MsgBox "cUIA 반환 실패"
-        StopMacro()
+    driverName := data.Has("driverName") ? Trim(data["driverName"]) : ""
+    if (driverName = "") {
+        PostApprovalError("운전자 이름이 없습니다.")
         return
     }
 
-    if (cUIA != "") {
-        ; SSO 페이지 호출 (기존 로직 참조)
-
-        cUIA.Navigate(
-            "https://mis.humetro.busan.kr/FS/xui/install/x_installChromeSSO.jsp?gv_selSystGubn=LA&gv_userBrowser=Edg", ,
-            1000)
-
-        if WinWait("개별업무통합관리", , 15) {
-            ; 이미 켜져있는 경우, 특정 픽셀(파란색 배경 등)을 확인하여 로그인 화면이면 재로그인 시도 루틴
-            ; (픽셀 체크 로직은 해상도/배율에 따라 불안정할 수 있으므로, 타이틀 위주로 체크 권장)
-
-            while !WinExist("개별업무통합관리 - 선로출입현황 조회") {
-
-                ; 로그인 여부 확인 (450,470 좌표 색상 체크)
-                if (PixelGetColor(450, 470) == 0x0063B5) {
-                    targetID := WinExist("A")
-                    WinClose("ahk_id " targetId)
-                    MsgBox "로그인 실패"
-                    return false
-                }
-
-                ; 무한 루프 방지
-                if (A_Index > 5)
-                    break
-                Sleep 500
-            }
-        } else {
-            ; 창이 안 뜨면 실패
-            return false
-        }
-    } else {
-        MsgBox("세션 준비된 브라우저가 없습니다.")
+    if SessionManager.IsReady() {
+        BringApprovalQuery(driverName, false)
         return
     }
 
-    if !WinWait("개별업무통합관리 - 선로출입현황 조회", , 30) {
-        MsgBox "timeout - 선로출입현황 조회 화면이 뜨지 않습니다."
-        return
-    }
-
-    WinClose("ahk_id " hwnd := cUIA.BrowserId)
-    WinWaitClose("ahk_id " hwnd, , 1)
-
-    resultData := false
-
-    if xldata := 승인정보_엑셀추출(data["driverName"]) {
-        try {
-            승인번호 := xldata["승인번호"]
-            승인부서 := xldata["승인부서"]
-            승인자 := xldata["승인자"]
-            xldata["워크북"].Close(false)  ; 저장하지 않고 닫기
-            xldata["통합문서"].quit()
-            resultData := Map("승인번호", 승인번호, "승인부서", 승인부서, "승인자", 승인자)
-        }
-        catch
-            MsgBox "엑셀 자동 추출이 불가능한 상태입니다`n확인 후 직접 입력바랍니다", , "icon!"
-    }
-    else
-        MsgBox "엑셀 자동 추출이 불가능한 상태입니다`n확인 후 직접 입력바랍니다", , "icon!"
-
-    WinClose("개별업무통합관리")
-    WinActivate(own_id)
-
-    return resultData
-
+    onReady := (*) => BringApprovalQuery(driverName, true)
+    onError := (message) => PostApprovalError(message)
+    SessionManager.AcquireAsync(ConfigManager.CurrentUser, onReady, onError)
 }
 
-; 승인정보_엑셀추출 - 엑셀에서 승인번호 가져오기/filtering
-; driverName: 필터링할 운전원 이름
-승인정보_엑셀추출(운전원) {
-    if !운전원
-        return { error: "운전원 이름이 없습니다." }
-
-    ; 엑셀 실행 확인 및 연결
-    try {
-        try {
-            xl := ComObjActive("Excel.Application")  	; 실행 중인 엑셀 붙기
-            if xl.WorkBooks.Count == 0 {
-                xl.quit()
-                for proc in ComObjGet("winmgmts:").ExecQuery("Select * from Win32_Process where Name = 'EXCEL.EXE'") {
-                    proc.Terminate()
-                }
-            }
-            else {
-                for xb in xl.WorkBooks {
-                    if xb.Name
-                        break
-                    else
-                        xb.close(false)
-                }
-                if xl.WorkBooks.Count == 0
-                    xl.quit()
-            }
-        }
-
-        Sleep 1000
-        Click 1200, 190									;엑셀열기
-        if !WinWaitActive("Microsoft Excel - Sheet", , 10) {
-            MsgBox "timeout"
-            ExitApp
-        }
-        sleep 1000
-
-        xl := ComObjActive("Excel.Application")  	; 실행 중인 엑셀 붙기
-        wb := xl.WorkBooks("Sheet1")
-        ws := wb.Worksheets("선로출입현황")
-    }
-    catch {
-        MsgBox "엑셀 자동 추출이 불가능한 상태입니다.`n확인 후 직접 입력바랍니다", , "icon!"
-
-        return false
-    }
+BringApprovalQuery(driverName, retried := false) {
+    global wv
 
     try {
-        ; 필터링 로직
-        ; 1. 조건 설정 (A9:B10) - 위치는 적절한 빈 곳 사용
-        ws.Range("A9").Value := "작업구분"
-        ws.Range("B9").Value := "운전원"
-        ws.Range("A10").Value := "*철도장비운행"
-        ws.Range("B10").Value := 운전원
-
-        criteriaRange := ws.Range("A9:B10")
-
-        ; 2. 결과 복사 위치 (A11)
-        ws.Range("A11:AZ100").ClearContents()
-        copyToRange := ws.Range("A11")
-
-        ; 3. 데이터 범위
-        dataRange := ws.UsedRange
-
-        ; 4. 필터 실행
-        dataRange.AdvancedFilter(2, criteriaRange, copyToRange, false)
-
-        ; 5. 결과 추출 (12행에 결과가 나온다고 가정)
-        resultVal := ws.Range("A12").Value
-        if (resultVal == "") {
-            return { error: "해당 운전원의 승인 정보를 찾을 수 없습니다." }
+        result := ApprovalInfoService.FindFirst(driverName)
+        payload := Map(
+            "type", "approvalInfo",
+            "data", Map(
+                "승인번호", result["ApprovalNo"],
+                "승인부서", result["Dept"],
+                "승인자", result["Approver"]
+            )
+        )
+        wv.PostWebMessageAsJson(JSON.stringify(payload))
+    } catch as err {
+        if !retried && SessionManager.IsExpiredError(err) {
+            LogDebug("승인정보 조회 중 세션 만료 감지: 통합 세션을 1회 재획득합니다.")
+            onReady := (*) => BringApprovalQuery(driverName, true)
+            onError := (message) => PostApprovalError(message)
+            SessionManager.Reacquire(onReady, onError)
+            return
         }
-
-        ; 추출 (레거시 매핑: 승인번호=D12, 부서=AE12, 승인자=AG12)
-        승인번호 := StrReplace(String(ws.Range("D12").Value), "`r`n", "")
-        승인부서 := StrReplace(StrReplace(String(ws.Range("AE12").Value), " ", ""), "`r`n", "")
-        승인자 := StrReplace(StrReplace(String(ws.Range("AG12").Value), " ", ""), "`r`n", "")
-
-        return Map("승인번호", 승인번호, "승인부서", 승인부서, "승인자", 승인자, "워크북", wb, "통합문서", xl)
-
-    } catch as e {
-        return false
+        PostApprovalError(err.Message)
     }
+}
+
+PostApprovalError(message) {
+    global wv
+    LogDebug("[승인정보 조회 실패] " message)
+    payload := Map("type", "approvalInfo", "data", false, "error", message)
+    try wv.PostWebMessageAsJson(JSON.stringify(payload))
 }
 
 ; --- Helper Functions ---
@@ -334,6 +232,7 @@ bringApproval(data) {
 lensInput(originalID, office := "", sname := "") {
 
     if !WinWaitNotActive(originalId, , 5) {
+        LogDebug("[오류] lensInput Timeout")
         MsgBox("ERROR - lensInput Timeout", "timeout", "icon!")
         return
     }
@@ -370,10 +269,11 @@ lensInput(originalID, office := "", sname := "") {
 menuClick(cUIA, str) {
     try {
         ; 상단 메뉴 바 찾기
-        menubtn := cUIA.WaitElement({ Name: "인원현황 일반업무 주요업무 자재사용 분야업무 안전관리 운전적합성 점검표"}, 5000)
+        menubtn := cUIA.WaitElement({ Name: "인원현황 일반업무 주요업무 자재사용 분야업무 안전관리 운전적합성 점검표" }, 5000)
         Sleep 100
         menubtn.FindElement({ Name: str }).ControlClick()
     } catch {
+        LogDebug("[오류] 메뉴 클릭 실패: " str)
         MsgBox("메뉴 클릭 실패: " str)
     }
     return

@@ -1,9 +1,12 @@
 #Requires AutoHotkey v2.0
 
-; URL 및 스프레드시트 상수
-global WebAppURL :=
-    "https://script.google.com/macros/s/AKfycbyoSMf94VffKSvIoBNJHKkQqY213h6M9KhTSBJ1BK9ed8dW64d50ZbjGWGu4n31bJB-/exec"
+; XLSX 변환은 신형 GAS API만 사용합니다.
+; FormList는 ui/app.js의 Firestore 실시간 구독으로 받습니다.
+global XlsxGasURL :=
+    "https://script.google.com/macros/s/AKfycbzuWS4Q5kTzDRH4IBpeXBa69KngElRdArtTCzTV0NDQsB3y4oABBIzrTLuPOZH5KOPP/exec"
 global TARGET_SPREADSHEET_ID := "19rgzRnTQtOwwW7Ts5NbBuItNey94dAZsEnO7Tk0cm6s"
+global ConfigBinId   := "6a01f09c250b1311c334eb00"     ; JSONBin.io 설정값 저장 ID
+global ConfigApiKey  := "$2a$10$vYJyJAvjKqXjjP1f91dIsuz0aohD49EAsE/mnIjXLC7Nak12lgEq6"    ; JSONBin.io 설정값 저장 API_Key
 
 ; URL 인코딩 함수 (UTF-8)
 URLEncode(str) {

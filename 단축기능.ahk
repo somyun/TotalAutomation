@@ -111,7 +111,7 @@ class ExcelHandler {
             WinActivate("ahk_id " xl.Hwnd)
 
         } catch as e {
-            MsgBox "엑셀 생성 중 오류 발생: " e.Message, "오류", "IconStop"
+            MsgBox "엑셀 생성 중 오류 발생: " e.Message, "오류", "Iconx"
         }
     }
 
@@ -204,74 +204,108 @@ class ExcelHandler {
 ; ==============================================================================
 class ShortcutActions {
 
-    ; Win + Z : 자동 로그인
+    ; 공통: 브라우저 실행 및 쿠키 주입 후 이동
+
+    ; Win + Z : 자동 로그인 (일반 모드)
     static AutoLoginAction(*) {
         user := ConfigManager.CurrentUser
         if (!user || user["id"] == "") {
             MsgBox "로그인된 사용자가 없습니다."
             return
         }
-
-        ShortcutActions.AutoERPPortal(user["id"], user["webPW"], user["pw2"])
-
-        ; 로그인 후 포커스 문제 해결
-        if !WinActive("ERP포털시스템 - 부산교통공사") {
-            try {
-                cUIA := UIA_Browser("ERP포털시스템 - 부산교통공사")
-                cUIA.WaitElement({ ClassName: "lastestip" }, 5000)
-                cUIA.send("{esc}")
-            }
-        }
-    }
-
-    ; Win + Alt + Z : 자동 로그인 + 일지 열기
-    static AutoLoginOpenLogAction(*) {
-        KeyWait "LWin"
-        KeyWait "Alt"
-
-        user := ConfigManager.CurrentUser
-        if (!user || user["id"] == "") {
-            MsgBox "로그인된 사용자가 없습니다."
+        if (!user || user["webPW"] == "") {
+            MsgBox "통합비번이 등록되어있지 않습니다."
             return
         }
 
-        ; 브라우저 찾기
-        browserExe := ""
-        for exe in ["chrome.exe", "msedge.exe"] {
-            if ProcessExist(exe) {
-                browserExe := exe
+        ; 1. 브라우저 실행
+        url := "https://btcep.humetro.busan.kr/portal/"
+        edgePath := "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+
+        Run(Format('"{1}" {2}', edgePath, url), , "Max")
+
+        ; 2. 통합 CookieJar 준비 대기 (중복 로그인 방지)
+        loop 16 {
+            if (SessionManager.IsReady(user["id"])
+                && SessionManager.HasCookieForUrl("https://btcep.humetro.busan.kr/portal/", "JSESSIONID")
+                && SessionManager.HasCookieForUrl("http://ep.humetro.busan.kr/irj/portal", "MYSAPSSO2"))
                 break
+            if A_Index == 16 {
+                MsgBox "통합 로그인 세션 확보 확인 실패"
+                return
             }
+
+            Sleep 250
         }
 
-        ; 로그인 실행
-        cUIA := ShortcutActions.AutoERPPortal(user["id"], user["webPW"], user["pw2"], browserExe)
+        ; 3. UIA 로그인 진행
+        try {
 
-        ;팝업 처리
-        cUIA.WaitElement({ ClassName: "lastestip" }, 5000)
-        cUIA.send("{esc}")
+            TargetHwnd := 0
+            loop 50 {
+                hwnds := WinGetList("ahk_exe msedge.exe")
+                for hwnd in hwnds {
+                    if InStr(WinGetTitle(hwnd), ":: 부산교통공사 ::") { ;이미 로그인상태 여부 확인
+                        cUIA := UIA.ElementFromHandle(hwnd)
+                        try {
+                            cUIA.WaitElement({ ClassName: "btn_logout" }, 1500)
+                            WinMaximize hwnd
+                            return
+                        }
+                        catch
+                            continue 2
+                    }
+                    else if InStr(WinGetTitle(hwnd), ":: 부산교통공사 포털시스템 ::") { ;로그인 필요
+                        WinMaximize hwnd
+                        cUIA := UIA_browser(hwnd)
+                        TargetHwnd := hwnd
+                        break 2
+                    }
+                    else if InStr(WinGetTitle(hwnd), "로그 아웃 ") { ;중복 로그인 발생 처리 후 로그인
+                        UIA.ElementFromHandle(hwnd).WaitElement({ LocalizedType: "단추", Name: "확인" }, 3000).Invoke()
+                        WinMaximize hwnd
+                        cUIA := UIA.ElementFromHandle(hwnd)
+                        TargetHwnd := hwnd
+                        break 2
+                    }
+                }
+                Sleep 50
+                if A_Index == 50 {
+                    MsgBox "인터넷 브라우저 상태를 감지할 수 없습니다"
+                    return
+                }
+            }
 
-        ;ERP포털 이동
-        cUIA.WaitElement({ Type: "Link", Name: "ERP" }, 3000).Invoke()
+            ; 아이디 입력창 대기
+            cUIA.WaitElement({ AutomationId: "userId" }, 3000).Value := user["id"]
+            cUIA.WaitElement({ AutomationId: "password" }, 1000).Value := user["webPW"]
+            cUIA.WaitElement({ ClassName: "btn_login" }, 1000).Invoke()
 
-        ; 업무일지 메뉴 이동
-        cUIA.WaitElement({ Name: "업무일지 업무일지" }, 10000).Invoke()
+            ; 2차 비밀번호
+            cUIA.WaitElement({ AutomationId: "certi_num" }, 3000).Value := user["pw2"]
+            cUIA.WaitElement({ ClassName: "btn_blue" }, 1000).Invoke()
 
-        ; 조회 및 클릭
-        targetDate := FormatTime(DateAdd(A_Now, -9, "Hours"), "yyyyMMdd")
-        targetName := targetDate " " user["department"] " 업무일지" ; 부서명 동적으로
+            ; 브라우저 접미사나 SetTitleMatchMode 설정에 영향을 받지 않도록 InStr 기반 대기 로직 적용 (최대 5초)
+            loop 50 {
+                if InStr(WinGetTitle(TargetHwnd), ":: 부산교통공사 ::")
+                    break
+                Sleep 100
+            }
 
-        try
-            dept := user["department"]
-        catch
-            MsgBox "업무일지 리스트 선택 실패, 분소명이 설정되지 않은 상태입니다"
+            ; 로그인 후 포커스 해결
+            cUIA.WaitElement({ ClassName: "lastestip" }, 5000)
+            cUIA.send("{esc}")
 
-        btnName := targetDate " " dept " 업무일지"
+        }
+        catch as e
+            MsgBox("UIA 할당 실패`n" e.Line " " e.Message)
 
-        cUIA.WaitElement({ Name: btnName }, 5000).Click("Left")
+        return
+    }
 
-        cUIA.FindElement({ LocalizedType: "링크", Name: "변경/조회" }).Invoke()
-
+    ; Win + Alt + Z : 일지 열기 (일반 모드)
+    static OpenLogAction(*) {
+        WebAutoLogin.EnsureReady("WorkLog_View")
     }
 
     ; Win + Alt + A : 웹 -> 엑셀
@@ -292,44 +326,5 @@ class ShortcutActions {
     ; Win + Ctrl + Esc : 종료
     static ForceExitAction(*) {
         OnExitApp()
-    }
-
-    ; ERP 로그인 로직
-    static AutoERPPortal(id, pw, certi, browserExe := "msedge.exe") {
-        url := " https://btcep.humetro.busan.kr/portal/default/main/erpportal.page"
-
-        ; 브라우저 실행 (이미 열려있으면 탭 추가/활성화는 UIA_Browser가 처리하거나 사용자가 함)
-        if (browserExe != "") {
-            Run browserExe " " url
-        } else {
-            Run url
-        }
-        Sleep 100
-
-        loop 100 {
-            try {
-                cUIA := UIA_Browser(":: 부산교통공사 포털시스템 ::")
-                cUIA.WaitElement({ AutomationId: "userId" }, 2000).value := id
-                cUIA.WaitElement({ AutomationId: "password" }, 1000).value := pw
-                cUIA.WaitElement({ ClassName: "btn_login" }, 1000).invoke()
-
-                ; 2차 인증
-                if (certi != "") {
-                    cUIA.WaitElement({ AutomationId: "certi_num" }, 2000).value := certi
-                    cUIA.WaitElement({ ClassName: "btn_blue" }, 1000).invoke()
-                }
-
-                cUIA.WaitTitleChange(":: 부산교통공사 ::", 5000)
-                return cUIA
-            }
-            catch {
-                try {
-                    cUIA := UIA_Browser("ERP포털시스템 - 부산교통공사")
-                    return cUIA
-                }
-            }
-            Sleep 100
-        }
-        return ""
     }
 }

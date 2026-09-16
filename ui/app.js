@@ -7,6 +7,108 @@ let loginUsers = []; // Store user data for login validation
 let isWorkLogInitialized = false; // Flag for persistence
 let pendingRestoreState = null; // State waiting for config load
 let currentSafetyEduData = {}; // [New] Store for Safety Edu Presets
+let guntaeData = null; // 근태 조회 결과 캐시
+
+// --- Firestore Realtime FormList ---
+const ERP_FIREBASE_CONFIG = Object.freeze({
+    apiKey: 'AIzaSyD4eSO-idxDepO8knAqLLzxX5ZfNCy9NAM',
+    authDomain: 'btcwebapp-551bd.firebaseapp.com',
+    projectId: 'btcwebapp-551bd'
+});
+let erpFormListUnsubscribe = null;
+const USER_SETTINGS_COLLECTION = 'userSettings';
+
+function getFirebaseApp() {
+    if (!window.firebase || typeof window.firebase.initializeApp !== 'function') {
+        throw new Error('Firebase SDK를 로드하지 못했습니다.');
+    }
+
+    const appName = 'erp-form-list-realtime';
+    return window.firebase.apps.find(app => app.name === appName)
+        || window.firebase.initializeApp(ERP_FIREBASE_CONFIG, appName);
+}
+
+function firestoreRevisionToIso(value) {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value.toDate === 'function') return value.toDate().toISOString();
+    if (Number.isFinite(value.seconds)) return new Date(value.seconds * 1000).toISOString();
+    return String(value);
+}
+
+function seoulDateKey(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value || '').slice(0, 10);
+
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Seoul',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).formatToParts(date);
+    const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}`;
+}
+
+function normalizeERPFormList(items) {
+    if (!Array.isArray(items)) return [];
+    return items
+        .map(item => {
+            const lastModifiedDate = firestoreRevisionToIso(item?.lastModifiedDate);
+            return {
+                formKey: String(item?.formKey || ''),
+                sheetName: String(item?.sheetName || '').trim(),
+                lastModifiedDate,
+                seoulDate: seoulDateKey(lastModifiedDate)
+            };
+        })
+        .filter(item => item.sheetName && item.lastModifiedDate);
+}
+
+function startERPFormListRealtime() {
+    if (erpFormListUnsubscribe) return;
+
+    if (!window.firebase || typeof window.firebase.initializeApp !== 'function') {
+        sendMessageToAHK({
+            command: 'erpFormListError',
+            message: 'Firebase SDK를 로드하지 못했습니다.'
+        });
+        return;
+    }
+
+    try {
+        const firebaseApp = getFirebaseApp();
+        const formListRef = firebaseApp.firestore().collection('publicCache').doc('formList');
+
+        erpFormListUnsubscribe = formListRef.onSnapshot(snapshot => {
+            const items = snapshot.exists
+                ? normalizeERPFormList(snapshot.data()?.items)
+                : [];
+            sendMessageToAHK({
+                command: 'updateERPFormList',
+                source: 'firestore',
+                items
+            });
+        }, error => {
+            console.error('ERP FormList Firestore listener failed:', error);
+            sendMessageToAHK({
+                command: 'erpFormListError',
+                message: error?.message || String(error)
+            });
+        });
+
+        window.addEventListener('beforeunload', () => {
+            if (erpFormListUnsubscribe) erpFormListUnsubscribe();
+            erpFormListUnsubscribe = null;
+        }, { once: true });
+    } catch (error) {
+        console.error('ERP FormList Firestore initialization failed:', error);
+        sendMessageToAHK({
+            command: 'erpFormListError',
+            message: error?.message || String(error)
+        });
+    }
+}
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
@@ -37,6 +139,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (window.chrome && window.chrome.webview) {
         window.chrome.webview.postMessage({ command: 'ready' });
     }
+    startERPFormListRealtime();
 
     // Password Validation Listeners
     setupPasswordValidation('new-webpw', 'new-webpw2');
@@ -80,16 +183,34 @@ document.addEventListener('DOMContentLoaded', () => {
     // The user mentioned "ERP Check tab order number", but that might be dynamically generated.
     // I will add a helper for it.
 
-    // [UX] Enter Key Handler for User Selection View
+    // [UX] Keyboard Navigation Handler for User Selection View (Enter / ArrowUp / ArrowDown)
     document.addEventListener('keydown', (e) => {
         const loginView = document.getElementById('login-view');
-        // Check if Login View is visible (offsetParent is null if display:none or parent is hidden)
-        if (e.key === 'Enter' && loginView && loginView.offsetParent !== null) {
-            // Only proceed if a user is actually selected
+        // login-view가 화면에 보일 때만 동작
+        if (!loginView || loginView.offsetParent === null) return;
+
+        if (e.key === 'Enter') {
+            // 사용자가 선택된 상태에서 Enter → 비밀번호 입력 화면으로 이동
             if (selectedUserId) {
-                e.preventDefault(); // Prevent double triggers if button is focused
+                e.preventDefault();
                 moveToPasswordView();
             }
+        } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            const items = [...document.querySelectorAll('.user-item')];
+            if (items.length === 0) return;
+
+            const currentIndex = items.findIndex(el => el.dataset.id === selectedUserId);
+            let nextIndex;
+            if (e.key === 'ArrowDown') {
+                // 마지막 항목이면 멈춤
+                nextIndex = Math.min(currentIndex + 1, items.length - 1);
+            } else {
+                // 첫 번째 항목이면 멈춤
+                nextIndex = Math.max(currentIndex - 1, 0);
+            }
+            selectUser(items[nextIndex].dataset.id);
+            items[nextIndex].scrollIntoView({ block: 'nearest' });
         }
     });
 });
@@ -145,12 +266,22 @@ function handleAhkMessage(msg) {
         case 'initLogin':
             loginUsers = msg.users;
             renderUserList(msg.users);
+            if (msg.preSelectUid) {
+                selectUser(msg.preSelectUid);
+            }
             break;
         case 'loginSuccess':
             handleLoginSuccess(msg.profile);
             break;
         case 'loginFail':
             showNativeMsgBox(msg.message, "로그인 실패");
+            break;
+        case 'confirmMsgboxResult':
+            if (pendingNativeConfirmations.has(msg.requestId)) {
+                const resolve = pendingNativeConfirmations.get(msg.requestId);
+                pendingNativeConfirmations.delete(msg.requestId);
+                resolve(!!msg.confirmed);
+            }
             break;
         case 'updateShiftStatus':
             updateShiftUI(msg.data);
@@ -205,7 +336,7 @@ function handleAhkMessage(msg) {
                 setVal('vl-dept', msg.data.승인부서);
                 setVal('vl-approver', msg.data.승인자);
             } else {
-                showNativeMsgBox("승인정보를 불러오지 못했습니다.");
+                showNativeMsgBox(msg.error || "승인정보를 불러오지 못했습니다.");
             }
             break;
         case 'updateERPOrderList': // New Case
@@ -216,21 +347,34 @@ function handleAhkMessage(msg) {
             const tEl = document.getElementById('app-title');
             if (tEl) tEl.innerText = msg.title; // 사용자 눈에 보이는 커스텀 타이틀바 갱신
             break;
-        case 'headlessReady':
-            // [New] Headless 준비 완료 시 버튼 활성화
-            const btnImport = document.getElementById('btn-import-workers');
-            if (btnImport) btnImport.disabled = false;
-
-            // ERP 새로고침 버튼도 활성화
-            const btnRefresh = document.getElementById('btn-refresh-erp');
-            if (btnRefresh) {
-                btnRefresh.disabled = false;
-                btnRefresh.style.opacity = "1";
-            }
+        case 'updateGuntae':
+            // 근태 조회 결과 수신
+            guntaeData = msg.data;
+            applyGuntaeData(msg.data);
             break;
         case 'updateWorkerList':
-            // [New] 작업자 명단 수신 처리
+            // 작업자 명단 수신 처리
             handleWorkerListUpdate(msg.data);
+            break;
+        case 'updateLocationList':
+            // 점검장소 불어오기 수신 처리
+            handleLocationListUpdate(msg.data);
+            break;
+        case 'updateAgreementNo':
+            if (msg.value) {
+                setVal('ta-agreement-no', msg.value);
+                // 현재 선택된 프리셋에 자동 저장
+                const sel = document.getElementById('track-preset-sel');
+                const presetKey = sel ? sel.value : '';
+                if (presetKey && presetKey !== '__NEW__') {
+                    const presets = getUserPresets('track');
+                    if (presets[presetKey]) {
+                        presets[presetKey].agreementNo = msg.value;
+                        presets[presetKey].agreementNoDate = new Date().toISOString().slice(0, 10);
+                        saveUserPresets('track', presets);
+                    }
+                }
+            }
             break;
         case 'showInitOverlay':
             // [New] 초기화 오버레이 표시
@@ -240,7 +384,61 @@ function handleAhkMessage(msg) {
             // [New] 초기화 오버레이 숨김
             hideInitOverlay();
             break;
+        case 'sessionStatus':
+            handleSessionStatus(msg.state, msg.message);
+            break;
+        case 'requireAuth':
+            if (selectedUserId) {
+                switchView('login');
+                moveToPasswordView();
+            }
+            break;
     }
+}
+
+// --- Session Status Overlay ---
+function handleSessionStatus(state, message) {
+    const overlay = document.getElementById('session-status-overlay');
+    const textSpan = document.getElementById('session-status-text');
+    if (!overlay || !textSpan) return;
+
+    // Reset inline styles
+    overlay.style.backgroundColor = '';
+    overlay.style.color = '';
+
+    if (state === 'acquiring') {
+        setSessionControlsEnabled(false);
+        textSpan.innerText = '통합 세션 로그인 중...';
+        overlay.classList.add('show');
+    } else if (state === 'ready') {
+        setSessionControlsEnabled(true);
+        textSpan.innerText = '준비완료';
+        // 서서히 사라지도록 (1.5초 유지 후 transition 효과로 fade out)
+        setTimeout(() => {
+            overlay.classList.remove('show');
+        }, 1500);
+    } else if (state === 'error') {
+        setSessionControlsEnabled(false);
+        textSpan.innerText = message || '세션확보 실패';
+        overlay.style.backgroundColor = 'rgba(255, 235, 238, 0.95)';
+        overlay.style.color = '#c62828';
+        overlay.classList.add('show');
+
+        // 에러 메세지도 3초 후 서서히 사라지도록 처리
+        setTimeout(() => {
+            overlay.classList.remove('show');
+        }, 3000);
+    }
+}
+
+function setSessionControlsEnabled(enabled) {
+    ['btn-import-workers', 'btn-import-locations', 'btn-refresh-erp', 'btn-approval-info']
+        .forEach(id => {
+            const button = document.getElementById(id);
+            if (!button) return;
+            button.disabled = !enabled;
+            if (id === 'btn-refresh-erp') button.style.opacity = enabled ? '1' : '0.5';
+        });
 }
 
 // --- Initialization Overlay ---
@@ -448,6 +646,12 @@ function switchMainTab(viewId) {
         }
         // 통합 UI 갱신 함수 호출 (ERP 점검 포함)
         refreshUI();
+
+        // 4차 요구사항: 탭 진입 시 자동 새로고침(AHK 갱신 요청) 수행
+        const btnRefresh = document.getElementById('btn-refresh-erp');
+        if (btnRefresh && !btnRefresh.disabled) {
+            btnRefresh.click();
+        }
     } else if (viewId === 'view-work-log') {
         // Only render if NOT initialized yet (Persistence Fix)
         if (!isWorkLogInitialized) {
@@ -495,7 +699,17 @@ function openSettings() {
 }
 
 function closeSettings() {
-    sendMessageToAHK({ command: 'exitSettings' });
+    let passwordsChanged = false;
+    const uid = selectedUserId;
+    if (uid && appConfig.users && appConfig.users[uid]) {
+        const profile = appConfig.users[uid].profile || {};
+        if ((profile.webPW || '') !== initialPasswords.webPW ||
+            (profile.pw2 || '') !== initialPasswords.pw2 ||
+            (profile.sapPW || '') !== initialPasswords.sapPW) {
+            passwordsChanged = true;
+        }
+    }
+    sendMessageToAHK({ command: 'exitSettings', passwordsChanged: passwordsChanged });
     switchView('app');
 }
 
@@ -704,7 +918,7 @@ function tryLogin() {
 function handleLoginSuccess(profile) {
     switchView('app');
     const titleEl = document.getElementById('app-title');
-    if (titleEl) titleEl.innerText = `통합자동화 v3.0 - ${profile.name}`;
+    if (titleEl) titleEl.innerText = `통합자동화 - ${profile.name}`;
 
     // Set selectedUserId to current logged in user to ensure settings load correct user profile
     selectedUserId = profile.id;
@@ -718,6 +932,54 @@ function handleLoginSuccess(profile) {
     isWorkLogInitialized = false; // Add this line to ensure reset
 
     switchMainTab('view-work-log');
+
+    // Missing PW Check
+    if (!profile.hideMissingPwWarning) {
+        let missingTypes = [];
+        if (!profile.webPW) missingTypes.push('통합pw');
+        if (!profile.sapPW) missingTypes.push('SAPpw');
+
+        if (missingTypes.length > 0) {
+            showMissingPwModal(missingTypes);
+        }
+    }
+}
+
+function showMissingPwModal(missingTypes) {
+    const modal = document.getElementById('missing-pw-modal');
+    if (!modal) return;
+
+    const descEl = document.getElementById('missing-pw-desc');
+    let descHtml = `<b>${missingTypes.join(', ')}</b>가 지정되어 있지 않습니다.<br><br>`;
+    descHtml += `다음 기능 사용이 제한됩니다:<br>`;
+    if (missingTypes.includes('통합pw')) {
+        descHtml += `- 자동로그인 단축키 사용불가<br>- 업무일지 및 선로출입관리 동작 시 수동로그인 필요<br>`;
+    }
+    if (missingTypes.includes('SAPpw')) {
+        descHtml += `- ERP점검기능 사용 불가<br>`;
+    }
+    descEl.innerHTML = descHtml;
+
+    const chk = document.getElementById('chk-hide-missing-pw');
+    if (chk) chk.checked = false;
+
+    modal.style.display = 'flex';
+}
+
+function closeMissingPwModal() {
+    const modal = document.getElementById('missing-pw-modal');
+    if (modal) modal.style.display = 'none';
+
+    const chk = document.getElementById('chk-hide-missing-pw');
+    if (chk && chk.checked && selectedUserId && appConfig.users && appConfig.users[selectedUserId]) {
+        appConfig.users[selectedUserId].profile.hideMissingPwWarning = true;
+        sendMessageToAHK({ command: 'saveConfig', data: appConfig });
+    }
+}
+
+function goSetMissingPw() {
+    closeMissingPwModal();
+    openSettings();
 }
 
 function deleteUser() {
@@ -731,6 +993,7 @@ function deleteUser() {
 function submitNewUser() {
     const name = getVal('new-name');
     const id = getVal('new-id');
+    const dept = getVal('new-dept');
     const team = getVal('new-team');
 
     const webpw = getVal('new-webpw');
@@ -740,7 +1003,7 @@ function submitNewUser() {
     const sappw = getVal('new-sappw');
     const sappw2 = getVal('new-sappw2');
 
-    if (!name || !id || !webpw || !pw2) {
+    if (!name || !id || !dept || !webpw || !pw2) {
         showNativeMsgBox('필수 정보를 입력해주세요.');
         return;
     }
@@ -757,14 +1020,19 @@ function submitNewUser() {
         return;
     }
 
-    const newUser = { id, name, team, webPW: webpw, pw2: pw2, sapPW: sappw };
+    const deptEl = document.getElementById('new-dept');
+    const deptName = deptEl.options[deptEl.selectedIndex] ? deptEl.options[deptEl.selectedIndex].text : "";
+
+    const deptCodeval = deptEl.options[deptEl.selectedIndex] ? (deptEl.options[deptEl.selectedIndex].dataset.codeval || "") : "";
+
+    const newUser = { id, name, team, arbpl: dept, department: deptName, codeval: deptCodeval, webPW: webpw, pw2: pw2, sapPW: sappw };
     sendMessageToAHK({ command: 'addUser', data: newUser });
 
     switchView('login');
 }
 
 function resetAddUserForm() {
-    ['new-name', 'new-id', 'new-webpw', 'new-webpw2', 'new-pw2', 'new-pw2-confirm', 'new-sappw', 'new-sappw2'].forEach(id => {
+    ['new-name', 'new-id', 'new-dept', 'new-webpw', 'new-webpw2', 'new-pw2', 'new-pw2-confirm', 'new-sappw', 'new-sappw2'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
     });
@@ -772,6 +1040,7 @@ function resetAddUserForm() {
 
 // --- Settings Logic ---
 let saveTimeout = null;
+let initialPasswords = { webPW: '', pw2: '', sapPW: '' };
 function autoSaveSettings() {
     if (saveTimeout) clearTimeout(saveTimeout);
     saveTimeout = setTimeout(saveSettings, 500); // 500ms debounce
@@ -788,6 +1057,12 @@ function loadSettingsToUI() {
     if (!user) return;
 
     const profile = user.profile || {};
+
+    initialPasswords = {
+        webPW: profile.webPW || '',
+        pw2: profile.pw2 || '',
+        sapPW: profile.sapPW || ''
+    };
 
     setVal('user-name', profile.name);
     setVal('user-id', profile.id);
@@ -852,6 +1127,9 @@ function loadSettingsToUI() {
             const gwData = defaults.generalWork || [];
             gwData.forEach(row => addGeneralWorkRow(row));
         }
+
+        // 초기 토글 상태 적용
+        if (typeof toggleGeneralWorkShift === 'function') toggleGeneralWorkShift();
 
         // 4. Auto Input Reservation
         setVal('fps-auto-input-time', defaults.autoInputTime);
@@ -932,11 +1210,18 @@ function saveSettings() {
         if (deptSel) {
             user.profile.arbpl = deptSel.value; // Store ID (e.g. 5129)
             user.profile.department = deptSel.options[deptSel.selectedIndex] ? deptSel.options[deptSel.selectedIndex].text : ""; // Store Name
+            user.profile.codeval = deptSel.options[deptSel.selectedIndex] ? (deptSel.options[deptSel.selectedIndex].dataset.codeval || "") : ""; // Store Codeval
         }
         user.profile.team = getVal('user-team');
         user.profile.webPW = getVal('user-webpw');
         user.profile.pw2 = getVal('user-pw2');
         user.profile.sapPW = getVal('user-sappw');
+
+        // 모든 비밀번호가 지정된 경우 '다시 묻지 않음' 설정을 초기화
+        if (user.profile.webPW && user.profile.sapPW) {
+            user.profile.hideMissingPwWarning = false;
+        }
+
         // New Setting: Inspector Display Format Preference
         user.profile.erpFormat = getVal('erp-format-pref');
 
@@ -1026,8 +1311,8 @@ function saveSettings() {
             const selects = row.querySelectorAll('select');
             const inputs = row.querySelectorAll('input');
             dailyLogDefaults.generalWork.push({
-                workType: selects[0].value,
-                category: selects[1].value,
+                workType: row.dataset.workType || '주간',
+                category: selects[0].value,
                 content: inputs[0].value,
                 manager: inputs[1].value,
                 start: inputs[2].value,
@@ -1042,6 +1327,324 @@ function saveSettings() {
         showNativeMsgBox("설정 저장 중 오류: " + e.message);
     }
 }
+
+// --- Firebase User Settings Backup ---
+const PRIVATE_SETTING_KEYS = new Set([
+    'webPW', 'pw2', 'sapPW', 'password', 'passwordConfirm'
+]);
+const IDENTITY_PROFILE_KEYS = new Set(['id', 'name']);
+const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+
+function isPrivateSettingKey(key) {
+    const normalizedKey = String(key).toLowerCase();
+    return PRIVATE_SETTING_KEYS.has(key)
+        || normalizedKey.includes('password')
+        || /pw\d*$/.test(normalizedKey);
+}
+
+function cloneExportableSettings(value) {
+    if (value === undefined) {
+        return null;
+    }
+    if (Array.isArray(value)) {
+        return value.map(cloneExportableSettings);
+    }
+    if (!value || typeof value !== 'object') {
+        return value;
+    }
+
+    const result = {};
+    Object.keys(value).forEach(key => {
+        if (UNSAFE_OBJECT_KEYS.has(key) || isPrivateSettingKey(key)) return;
+        result[key] = cloneExportableSettings(value[key]);
+    });
+    return result;
+}
+
+function buildExportableUserSettings(user) {
+    const settings = {};
+
+    Object.keys(user || {}).forEach(key => {
+        if (key === 'profile' || key === 'appSettings' || UNSAFE_OBJECT_KEYS.has(key) || isPrivateSettingKey(key)) return;
+        // Legacy presets is separate from trackPresets; omit only its empty placeholder.
+        if (key === 'presets' && user[key] && typeof user[key] === 'object' && Object.keys(user[key]).length === 0) return;
+        settings[key] = cloneExportableSettings(user[key]);
+    });
+
+    const profile = {};
+    Object.keys(user?.profile || {}).forEach(key => {
+        if (IDENTITY_PROFILE_KEYS.has(key) || UNSAFE_OBJECT_KEYS.has(key) || isPrivateSettingKey(key)) return;
+        profile[key] = cloneExportableSettings(user.profile[key]);
+    });
+    settings.profile = profile;
+
+    return settings;
+}
+
+function formatSettingsExportPreview(employeeId, settings) {
+    const labels = {
+        profile: '개인 설정', arbpl: '분소 코드', department: '분소', codeval: '분소 부가 코드',
+        team: '근무조', erpFormat: '점검자 입력 형식', autoExit: '자동 종료',
+        hideMissingPwWarning: '비밀번호 누락 안내 숨김', hotkeys: '단축키 설정',
+        presets: '기존 선로출입 프리셋', trackPresets: '선로출입 프리셋', vehiclePresets: '차량일지 프리셋',
+        dailyLogDefaults: '일지 프리셋 기본값', safety: '안전관리 기본값', driverCheck: '운전적합성 검사 방식',
+        generalWork: '일반업무 기본값', safetyEdu: '요일별 안전교육', autoInputTime: '열차순회 자동입력 예약시간',
+        action: '기능', key: '단축키', desc: '설명', enabled: '활성', content: '내용',
+        start: '시작', end: '종료', workType: '근무', category: '분류', manager: '책임자'
+    };
+    const trackLabels = {
+        workType: '작업구분', content: '작업내역', workFrom: '작업구간 (From)', workTo: '작업구간 (To)',
+        driverName: '운전원 이름', driverPhone: '운전원 연락처', workerName: '작업자 이름', workerPhone: '작업자 연락처',
+        safetyName: '철도운행안전관리자 이름', safetyPhone: '철도운행안전관리자 연락처',
+        supervisorName: '감독자 이름', supervisorId: '감독자 사번', workStart: '작업시간 시작', workEnd: '작업시간 종료',
+        opStart: '운행시간 시작', opEnd: '운행시간 종료', line: '호선', trackType: '선로구분',
+        trackCutoff: '선로차단여부', agreementNo: '철도운행협의서 No.', agreementNoDate: '협의번호 저장일',
+        totalCount: '총원 (인원 구성)', stationInput: '출입역 입력'
+    };
+    const vehicleLabels = {
+        driver: '운전자', point1: '작업구간 (시점)', point2: '작업구간 (종점)', trackType: '선로구분',
+        startTime: '운행시간 시작', endTime: '운행시간 종료', approveNo: '승인정보 승인번호',
+        dept: '승인정보 부서', approver: '승인정보 승인자', runTime: '가동시간', distance: '적산계',
+        content: '내용', remarks: '비고'
+    };
+    const label = (key, context) => (context === 'trackPresets' ? trackLabels[key] : context === 'vehiclePresets' ? vehicleLabels[key] : null) || labels[key] || String(key);
+    const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+    const valueText = value => {
+        if (value === null || value === undefined || value === '') return '(없음)';
+        if (typeof value === 'boolean') {
+            return value ? '사용' : '사용 안 함';
+        }
+        return String(value);
+    };
+    const cell = value => escapeHtml(valueText(value));
+    const isObject = value => value && typeof value === 'object' && !Array.isArray(value);
+    const isFlatObject = value => isObject(value) && Object.values(value).every(item => !item || typeof item !== 'object');
+    const selectText = (id, value) => {
+        const select = document.getElementById(id);
+        const option = select && [...select.options].find(item => item.value === String(value));
+        return option ? option.textContent.trim() : value;
+    };
+    const displayValue = (value, key, context) => {
+        if (context === 'trackPresets') {
+            const selects = { workType: 'ta-work-type', line: 'ta-line', trackType: 'ta-track-type' };
+            if (selects[key]) return selectText(selects[key], value);
+        }
+        return value;
+    };
+    const pairTable = (items, context, className = '') => {
+        if (!items.length) return '<p class="empty">(없음)</p>';
+        const widths = className === 'safety-edu' ? [7, 43, 7, 43]
+            : className === 'vehicle-preset' ? [13, 27, 13, 47] : [20, 30, 20, 30];
+        const colgroup = `<colgroup>${widths.map(width => `<col style="width:${width}%">`).join('')}</colgroup>`;
+        let rows = '';
+        for (let i = 0; i < items.length; i += 2) {
+            const pair = items.slice(i, i + 2);
+            rows += '<tr>' + pair.map(([key, value]) => `<th>${escapeHtml(label(key, context))}</th><td>${cell(displayValue(value, key, context))}</td>`).join('')
+                + (pair.length === 1 ? '<th></th><td></td>' : '') + '</tr>';
+        }
+        return `<table class="pairs ${className}">${colgroup}<tbody>${rows}</tbody></table>`;
+    };
+    const trackPresetTable = preset => {
+        // Match the two columns and top-to-bottom field order of the Track Access screen.
+        const left = [
+            ['작업구분', ['workType']], ['작업내역', ['content']], ['작업구간 (From ~ To)', ['workFrom', 'workTo']],
+            ['운전원 (이름 / 연락처)', ['driverName', 'driverPhone']], ['작업자 (이름 / 연락처)', ['workerName', 'workerPhone']],
+            ['철도운행안전관리자 (이름 / 연락처)', ['safetyName', 'safetyPhone']], ['감독자 (이름 / 사번)', ['supervisorName', 'supervisorId']]
+        ];
+        const right = [
+            ['작업시간 (시작 ~ 종료)', ['workStart', 'workEnd']], ['운행시간 (시작 ~ 종료)', ['opStart', 'opEnd']],
+            ['호선', ['line']], ['선로구분', ['trackType']], ['선로차단여부', ['trackCutoff']],
+            ['철도운행협의서 No.', ['agreementNo']], ['총원 (인원 구성)', ['totalCount']],
+            ['출입역 입력', ['stationInput']], ['협의번호 저장일', ['agreementNoDate']]
+        ];
+        const seen = new Set([...left, ...right].flatMap(([, keys]) => keys));
+        Object.keys(preset).forEach(key => {
+            if (!seen.has(key)) right.push([label(key, 'trackPresets'), [key]]);
+        });
+        const groupText = keys => keys.map(key => valueText(displayValue(preset[key], key, 'trackPresets'))).join(' ~ ');
+        const rows = Array.from({ length: Math.max(left.length, right.length) }, (_, index) => {
+            const cells = [left[index], right[index]].map(group => group
+                ? `<th>${escapeHtml(group[0])}</th><td>${escapeHtml(groupText(group[1]))}</td>`
+                : '<th></th><td></td>');
+            return `<tr>${cells.join('')}</tr>`;
+        }).join('');
+        return `<table class="pairs track-preset"><colgroup><col style="width:27%"><col style="width:32%"><col style="width:19%"><col style="width:22%"></colgroup><tbody>${rows}</tbody></table>`;
+    };
+    const rowTable = (items, context) => {
+        if (!items.length) return '<p class="empty">(없음)</p>';
+        const keys = [...new Set(items.flatMap(item => Object.keys(item)))];
+        const generalWorkWidths = { workType: 9, category: 10, content: 49, manager: 10, start: 8, end: 8 };
+        const useGeneralWidths = context === 'generalWork' && keys.length === 6 && keys.every(key => Object.prototype.hasOwnProperty.call(generalWorkWidths, key));
+        const colgroup = useGeneralWidths ? `<colgroup><col style="width:6%">${keys.map(key => `<col style="width:${generalWorkWidths[key]}%">`).join('')}</colgroup>` : '';
+        return `<table class="${context === 'generalWork' ? 'general-work' : ''}">${colgroup}<thead><tr><th class="number">번호</th>${keys.map(key => `<th>${escapeHtml(label(key, context))}</th>`).join('')}</tr></thead><tbody>`
+            + items.map((item, index) => `<tr><td class="number">${index + 1}</td>${keys.map(key => `<td>${cell(displayValue(item[key], key, context))}</td>`).join('')}</tr>`).join('')
+            + '</tbody></table>';
+    };
+    const render = (value, name, context = '', depth = 0) => {
+        const title = escapeHtml(label(name, context));
+        const heading = depth ? 'h4' : 'h3';
+        const nextContext = ['trackPresets', 'vehiclePresets', 'generalWork', 'safetyEdu'].includes(name) ? name : context;
+        if (Array.isArray(value)) {
+            if (value.every(isFlatObject)) return `<section><${heading}>${title}</${heading}>${rowTable(value, nextContext)}</section>`;
+            if (value.every(item => !item || typeof item !== 'object')) {
+                return `<section><${heading}>${title}</${heading}><table><tbody>${value.map((item, index) => `<tr><th>${index + 1}</th><td>${cell(item)}</td></tr>`).join('')}</tbody></table></section>`;
+            }
+            return `<section><${heading}>${title}</${heading}>${value.map((item, index) => render(item, `${index + 1}번째`, nextContext, depth + 1)).join('')}</section>`;
+        }
+        if (isObject(value)) {
+            const entries = Object.entries(value);
+            if (context === 'trackPresets' && depth > 0 && entries.every(([, item]) => !item || typeof item !== 'object')) {
+                return `<section><${heading}>${title}</${heading}>${trackPresetTable(value)}</section>`;
+            }
+            if (entries.every(([, item]) => !item || typeof item !== 'object')) {
+                const tableClass = nextContext === 'safetyEdu' ? 'safety-edu' : nextContext === 'vehiclePresets' ? 'vehicle-preset' : '';
+                return `<section><${heading}>${title}</${heading}>${pairTable(entries, nextContext, tableClass)}</section>`;
+            }
+            return `<section><${heading}>${title}</${heading}>${entries.map(([key, item]) => render(item, key, nextContext, depth + 1)).join('')}</section>`;
+        }
+        return `<section><${heading}>${title}</${heading}><p>${cell(value)}</p></section>`;
+    };
+    const body = Object.entries(settings).map(([key, value]) => render(value, key)).join('');
+    return `<!doctype html><html><head><meta charset="utf-8"><style>
+        body{font-family:'Malgun Gothic',sans-serif;font-size:13px;color:#202a34;margin:14px 18px;background:#fff}
+        h2{font-size:16px;margin:0 0 12px}h3{font-size:14px;margin:17px 0 7px;color:#183c59;border-bottom:1px solid #b8cbdc;padding-bottom:4px}
+        h4{font-size:13px;margin:12px 0 5px;color:#34495e}section{margin-bottom:8px}section section{margin-left:10px}
+        table{border-collapse:collapse;width:100%;margin:5px 0 10px;table-layout:fixed}th,td{border:1px solid #ccd5dc;padding:5px 7px;text-align:left;vertical-align:top;word-wrap:break-word}
+        thead th,.pairs th{background:#eef3f7;font-weight:600}.track-preset th{font-size:12px;white-space:nowrap}
+        .general-work .number{white-space:nowrap}.number{width:38px;text-align:center}.empty{color:#777;margin:5px 0}
+    </style></head><body><h2>사번 : ${escapeHtml(employeeId)}</h2>${body}</body></html>`;
+}
+
+const pendingNativeConfirmations = new Map();
+
+function requestNativeConfirmation(text, title = '확인', question = '위 내용으로 클라우드에 내보내기 하시겠습니까?') {
+    const requestId = (window.crypto && typeof window.crypto.randomUUID === 'function')
+        ? window.crypto.randomUUID()
+        : `${Date.now()}-${Math.random()}`;
+    return new Promise(resolve => {
+        pendingNativeConfirmations.set(requestId, resolve);
+        sendMessageToAHK({ command: 'confirmMsgbox', requestId, text, title, question });
+    });
+}
+
+function requestWorkerDeletionConfirmation(text) {
+    const requestId = (window.crypto && typeof window.crypto.randomUUID === 'function')
+        ? window.crypto.randomUUID()
+        : `${Date.now()}-${Math.random()}`;
+    return new Promise(resolve => {
+        pendingNativeConfirmations.set(requestId, resolve);
+        sendMessageToAHK({ command: 'confirmWorkerDeletion', requestId, text });
+    });
+}
+
+function setSettingsCloudButtonsDisabled(disabled) {
+    ['btn-import-settings', 'btn-export-settings'].forEach(id => {
+        const button = document.getElementById(id);
+        if (button) button.disabled = disabled;
+    });
+}
+
+function getCurrentSettingsUser() {
+    const employeeId = String(selectedUserId || '').trim();
+    const user = employeeId && appConfig.users ? appConfig.users[employeeId] : null;
+    if (!employeeId || !user) {
+        throw new Error('로그인한 사용자 정보를 확인할 수 없습니다.');
+    }
+    if (!/^\d+$/.test(employeeId)) {
+        throw new Error('사번 형식이 올바르지 않습니다.');
+    }
+    return { employeeId, user };
+}
+
+async function exportUserSettings() {
+    try {
+        if (saveTimeout) {
+            clearTimeout(saveTimeout);
+            saveTimeout = null;
+        }
+        saveSettings();
+
+        const { employeeId, user } = getCurrentSettingsUser();
+        const settings = buildExportableUserSettings(user);
+        setSettingsCloudButtonsDisabled(true);
+        if (!await requestNativeConfirmation(formatSettingsExportPreview(employeeId, settings), '설정 내보내기 확인')) {
+            setSettingsCloudButtonsDisabled(false);
+            return;
+        }
+
+        const firestore = getFirebaseApp().firestore();
+        await firestore.collection(USER_SETTINGS_COLLECTION).doc(employeeId).set({
+            schemaVersion: 1,
+            employeeId,
+            settings,
+            updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
+        });
+        showNativeMsgBox('사용자 설정을 Firebase에 저장했습니다.', '설정 내보내기');
+    } catch (error) {
+        console.error('Failed to export user settings:', error);
+        showNativeMsgBox(`설정을 내보내지 못했습니다.\n${error?.message || String(error)}`, '설정 내보내기 오류');
+    } finally {
+        setSettingsCloudButtonsDisabled(false);
+    }
+}
+
+function applyImportedUserSettings(user, importedSettings) {
+    const safeSettings = cloneExportableSettings(importedSettings || {});
+    const importedProfile = safeSettings.profile && typeof safeSettings.profile === 'object'
+        ? safeSettings.profile
+        : {};
+
+    Object.keys(safeSettings).forEach(key => {
+        if (key === 'profile' || key === 'appSettings' || UNSAFE_OBJECT_KEYS.has(key) || isPrivateSettingKey(key)) return;
+        user[key] = safeSettings[key];
+    });
+
+    if (!user.profile) user.profile = {};
+    Object.keys(importedProfile).forEach(key => {
+        if (IDENTITY_PROFILE_KEYS.has(key) || UNSAFE_OBJECT_KEYS.has(key) || isPrivateSettingKey(key)) return;
+        user.profile[key] = importedProfile[key];
+    });
+}
+
+async function importUserSettings() {
+    try {
+        const { employeeId, user } = getCurrentSettingsUser();
+        setSettingsCloudButtonsDisabled(true);
+
+        const firestore = getFirebaseApp().firestore();
+        const snapshot = await firestore.collection(USER_SETTINGS_COLLECTION).doc(employeeId).get();
+        if (!snapshot.exists) {
+            showNativeMsgBox('Firebase에 저장된 설정값이 없습니다. 먼저 설정 내보내기를 해주세요.', '설정 불러오기');
+            return;
+        }
+
+        const stored = snapshot.data() || {};
+        if (!stored.settings || typeof stored.settings !== 'object' || Array.isArray(stored.settings)) {
+            throw new Error('저장된 설정 데이터 형식이 올바르지 않습니다.');
+        }
+
+        const importedSettings = buildExportableUserSettings(stored.settings);
+        if (!await requestNativeConfirmation(
+            formatSettingsExportPreview(employeeId, importedSettings),
+            '설정 불러오기 확인',
+            '위 내용으로 설정을 적용하시겠습니까?'
+        )) return;
+
+        applyImportedUserSettings(user, importedSettings);
+        sendMessageToAHK({ command: 'saveConfig', data: appConfig });
+        loadSettingsToUI();
+        refreshUI();
+        showNativeMsgBox('Firebase에서 사용자 설정을 불러와 적용했습니다.', '설정 불러오기');
+    } catch (error) {
+        console.error('Failed to import user settings:', error);
+        showNativeMsgBox(`설정을 불러오지 못했습니다.\n${error?.message || String(error)}`, '설정 불러오기 오류');
+    } finally {
+        setSettingsCloudButtonsDisabled(false);
+    }
+}
+
+window.exportUserSettings = exportUserSettings;
+window.importUserSettings = importUserSettings;
 
 // --- Worker Logic ---
 function handleManagerCheck(checkbox) {
@@ -1145,7 +1748,7 @@ function addLocationRowToTable(tbody, data) {
 // --- Hotkey Logic ---
 const defaultHotkeys = [
     { action: "AutoLogin", key: "#z", desc: "자동 로그인" },
-    { action: "AutoLoginOpenLog", key: "#!z", desc: "자동 로그인 + 업무일지 실행" },
+    { action: "OpenLog", key: "#!z", desc: "업무일지 실행" },
     { action: "ConvertExcel", key: "#!a", desc: "일반업무 -> 엑셀 변환" },
     { action: "CopyExcel", key: "#!c", desc: "엑셀 데이터 복사" },
     { action: "PasteExcel", key: "#!v", desc: "일반업무에 붙여넣기" },
@@ -1154,7 +1757,7 @@ const defaultHotkeys = [
 
 const hotkeyTranslations = {
     "AutoLogin": "자동 로그인",
-    "AutoLoginOpenLog": "자동 로그인 + 일지",
+    "OpenLog": "업무일지 실행",
     "ConvertExcel": "엑셀 변환",
     "CopyExcel": "엑셀 복사",
     "PasteExcel": "붙여넣기",
@@ -1415,6 +2018,12 @@ function handleERPStatusUpdate(statusMap) {
             dot.style.display = 'inline';
         }
     });
+
+    // 4차 요구사항(일괄모드 연동)
+    if (erpBatchAppInstance && typeof erpBatchAppInstance.latestStatusMap !== 'undefined') {
+        // Vue3 반응성 시스템 트리거를 위해 객체를 완전히 새로 할당
+        erpBatchAppInstance.latestStatusMap = { ...(statusMap || {}) };
+    }
 }
 
 window.handleERPStatusUpdate = handleERPStatusUpdate;
@@ -1455,6 +2064,12 @@ function handleERPOrderListUpdate(orders) {
             }
         });
     });
+
+    // 4차 요구사항(일괄모드 연동)
+    if (erpBatchAppInstance && typeof erpBatchAppInstance.completedOrders !== 'undefined') {
+        // Vue3 배열 반응성을 위해 새로운 배열 인스턴스 할당
+        erpBatchAppInstance.completedOrders = orders ? [...orders] : [];
+    }
 }
 
 function selectERPLoc(btn, locName) {
@@ -1466,36 +2081,284 @@ function selectERPLoc(btn, locName) {
     selectedERPLocation = locName;
 }
 
+let erpBatchAppInstance = null;
+let isBatchMode = false;
+
 function toggleERPMode() {
     const btn = document.getElementById('btn-erp-mode');
+    const indContainer = document.getElementById('erp-individual-container');
+    const batchContainer = document.getElementById('erp-batch-container');
+
     if (btn.innerText.includes('일괄모드')) {
+        // 개별 -> 일괄
         btn.innerText = '< 개별모드';
-        // TODO: Switch to Batch UI (Future)
-        showNativeMsgBox("일괄모드 준비 중입니다.");
+        indContainer.style.display = 'none';
+        batchContainer.style.display = 'flex';
+        isBatchMode = true;
+
+        // Vue App 초기화 (지연 마운트)
+        if (!erpBatchAppInstance) {
+            initERPBatchApp();
+        } else {
+            // 이미 마운트된 경우, 데이터를 최신 워커 목록으로 갱신
+            updateERPBatchData();
+        }
     } else {
+        // 일괄 -> 개별
         btn.innerText = '일괄모드 >';
-        // Switch back to Individual UI
+        batchContainer.style.display = 'none';
+        indContainer.style.display = 'flex';
+        isBatchMode = false;
     }
 }
 
-function runERPTask() {
-    const btn = document.getElementById('btn-erp-mode');
-    if (btn.innerText.includes('개별모드')) {
-        // Batch Mode Run
-        showNativeMsgBox("일괄모드 실행 (준비중)");
-        return;
+function initERPBatchApp() {
+    const { createApp } = Vue;
+    erpBatchAppInstance = createApp({
+        data() {
+            return {
+                locations: [],
+                workers: [],
+                activeRows: [], // Array of location names
+                selections: {},  // { locName: [workerId1, workerId2, ...] }
+                latestStatusMap: {},
+                completedOrders: []
+            };
+        },
+        mounted() {
+            this.syncData();
+        },
+        methods: {
+            syncData() {
+                // appConfig에서 변전소, 전기실, 기타업무 등 장소 목록 합치기
+                const locs = [];
+                if (appConfig && appConfig.appSettings && appConfig.appSettings.locations) {
+                    appConfig.appSettings.locations.forEach(loc => {
+                        let shortType = loc.type || '';
+                        if (shortType.startsWith('전기실')) shortType = '전기실';
+                        locs.push({ name: loc.name, type: shortType, order: loc.order });
+                    });
+                }
+                this.locations = locs;
+
+                // 로그인 유저 목록 또는 설정된 분소원 목록에서 워커 데이터 추출
+                this.workers = [];
+                const uid = selectedUserId;
+                if (uid && appConfig && appConfig.users && appConfig.users[uid]) {
+                    const userProfile = appConfig.users[uid].profile || {};
+                    const myTeam = userProfile.team || '';
+                    const allColleagues = appConfig.appSettings?.colleagues || [];
+
+                    // 필터링: 모달팝업(개별모드)과 동일하게 본인 부서만 표출
+                    const filteredWorkers = allColleagues.filter(w => {
+                        if (myTeam && w.team === myTeam) return true;
+                        return false;
+                    });
+
+                    // 정렬 로직 적용 (분소장 1순위, 사번순)
+                    const sortedWorkers = [...filteredWorkers].sort((a, b) => {
+                        if (a.isManager !== b.isManager) return b.isManager - a.isManager;
+                        return a.id.localeCompare(b.id);
+                    });
+
+                    this.workers = sortedWorkers.map(w => ({ id: w.id, name: w.name }));
+                }
+
+                // [버그 수정] 인스턴스 초기화 시, 이미 캐싱된 ERP 신호등 데이터(latestERPStatus)를 불러와 Vue 인스턴스에 주입
+                if (typeof latestERPStatus !== 'undefined' && latestERPStatus) {
+                    this.latestStatusMap = { ...latestERPStatus };
+                }
+            },
+            isRowActive(locName) {
+                return this.activeRows.includes(locName);
+            },
+            toggleRow(locName) {
+                const idx = this.activeRows.indexOf(locName);
+                if (idx > -1) {
+                    // 비활성화
+                    this.activeRows.splice(idx, 1);
+                    // 연쇄적으로 해당 행의 선택 내역 지우기
+                    delete this.selections[locName];
+                } else {
+                    // 활성화
+                    this.activeRows.push(locName);
+                    // 요구사항: 점검장소가 눌러져서 행 활성화 시 점검자 버튼은 모두 눌러진 상태가 기본값
+                    this.selections[locName] = this.workers.map(w => w.id);
+                }
+            },
+            isWorkerSelected(locName, workerId) {
+                if (!this.selections[locName]) return false;
+                return this.selections[locName].includes(workerId);
+            },
+            toggleWorker(locName, workerId) {
+                if (!this.isRowActive(locName)) return; // 방어 코드
+
+                if (!this.selections[locName]) {
+                    this.selections[locName] = [];
+                }
+
+                const selArr = this.selections[locName];
+                const idx = selArr.indexOf(workerId);
+
+                if (idx > -1) {
+                    selArr.splice(idx, 1);
+                } else {
+                    selArr.push(workerId);
+                }
+            },
+            getBatchData() {
+                // AHK에 보낼 형태로 데이터 정제
+                const result = [];
+                for (const locName of this.activeRows) {
+                    const selectedWorkerIds = this.selections[locName] || [];
+                    result.push({
+                        location: locName,
+                        workerIds: selectedWorkerIds
+                    });
+                }
+                return result;
+            }
+        }
+    }).mount('#erp-batch-container');
+}
+
+function updateERPBatchData() {
+    if (erpBatchAppInstance && erpBatchAppInstance.syncData) {
+        erpBatchAppInstance.syncData();
     }
+}
 
-    if (!selectedERPLocation) {
-        showNativeMsgBox("점검 장소를 선택해주세요.");
-        return;
+function openERPHandler() {
+    if (isBatchMode) {
+        if (!erpBatchAppInstance) return;
+        const batchData = erpBatchAppInstance.getBatchData();
+        if (batchData.length === 0) {
+            showNativeMsgBox("선택된 점검장소가 없습니다.");
+            return;
+        }
+
+        if (!erpBatchModalInstance) {
+            initERPBatchModalApp();
+        }
+
+        // 동기화
+        erpBatchModalInstance.openModal(batchData);
+    } else {
+        openERPWorkerModal(); // 개별모드 팝업창
     }
+}
 
-    // Send to AHK
-    sendMessageToAHK({ command: 'runTask', task: 'ERPCheck', location: selectedERPLocation });
+let erpBatchModalInstance = null;
+function initERPBatchModalApp() {
+    const { createApp } = Vue;
+    erpBatchModalInstance = createApp({
+        data() {
+            return {
+                batchDataRaw: [],
+                batchPreviewList: [],
+                isListFormat: false,
+                previewMaxCount: 0
+            };
+        },
+        methods: {
+            openModal(rawData) {
+                this.batchDataRaw = rawData;
+                const toggle = document.getElementById('toggle-worker-format');
+                if (toggle) this.isListFormat = toggle.checked;
+                this.updatePreviewList();
+                document.getElementById('erp-batch-modal').style.display = 'flex';
+            },
+            closeModal() {
+                document.getElementById('erp-batch-modal').style.display = 'none';
+            },
+            toggleFormat() {
+                this.isListFormat = !this.isListFormat;
+                // Update toggle state to Main Tab if needed, but keeping it simple for modal interaction
+                this.updatePreviewList();
+            },
+            updatePreviewList() {
+                // 부서 이름 최대 글자수 측정
+                let maxLocLen = 0;
+                this.batchDataRaw.forEach(item => {
+                    if (item.location.length > maxLocLen) maxLocLen = item.location.length;
+                });
 
-    // UI Feedback is handled by AHK or we can add it here if needed
-    // showNativeMsgBox(selectedERPLocation + " 점검 시작 요청");
+                let maxLen = 0;
+                this.batchPreviewList = this.batchDataRaw.map(item => {
+                    const workerNames = [];
+                    item.workerIds.forEach(id => {
+                        const w = erpBatchAppInstance.workers.find(wk => wk.id === id);
+                        if (w) workerNames.push(w.name);
+                    });
+                    if (workerNames.length > maxLen) maxLen = workerNames.length;
+
+                    let workersText = '';
+                    if (workerNames.length === 0) {
+                        workersText = '(선택 없음)';
+                    } else if (this.isListFormat) {
+                        workersText = workerNames.join(', ');
+                    } else {
+                        if (workerNames.length === 1) {
+                            workersText = workerNames[0];
+                        } else {
+                            workersText = `${workerNames[0]} 외 ${workerNames.length - 1}명`;
+                        }
+                    }
+
+                    // 하이픈 정렬을 위한 띄어쓰기 패딩
+                    const paddingSpaces = ' '.repeat(maxLocLen - item.location.length);
+                    const paddedLocName = ` ${paddingSpaces}${item.location} `;
+
+                    return {
+                        locName: paddedLocName,
+                        workersText: workersText
+                    };
+                });
+                this.previewMaxCount = (maxLen > 1) ? (maxLen - 1) : 0;
+            },
+            submitBatchTask() {
+                // Return structured Array of tasks mapping to original runTask
+                const format = this.isListFormat ? 'list' : 'summary';
+
+                const formattedBatchData = this.batchDataRaw.map((item, index) => {
+                    // targetType, targetOrder 속성 찾기 (appConfig.appSettings.locations 활용)
+                    let locType = "";
+                    let locOrder = "";
+                    if (appConfig && appConfig.appSettings && appConfig.appSettings.locations) {
+                        const locObj = appConfig.appSettings.locations.find(l => l.name === item.location);
+                        if (locObj) {
+                            locType = locObj.type || "";
+                            locOrder = locObj.order || "";
+                        }
+                    }
+
+                    // members 배열 완성 (id를 기반으로 실제 이름 찾기)
+                    const workerNames = [];
+                    item.workerIds.forEach(id => {
+                        const w = erpBatchAppInstance.workers.find(wk => wk.id === id);
+                        if (w) workerNames.push(w.name);
+                    });
+
+                    return {
+                        location: item.location,
+                        workersStr: this.batchPreviewList[index].workersText, // 알림 메시지 팝업에서의 목록 표시용 보존
+                        targetType: locType,
+                        targetOrder: locOrder,
+                        members: workerNames
+                    };
+                });
+
+                sendMessageToAHK({
+                    command: 'runTask',
+                    task: 'ERPCheck',
+                    batchmode: true,
+                    format: format,
+                    location: formattedBatchData
+                });
+                this.closeModal();
+            }
+        }
+    }).mount('#erp-batch-modal');
 }
 
 
@@ -1571,15 +2434,10 @@ function handleWorkTypeChange(skipRenderWorkers = true) {
         chkDrink.checked = false;
         chkCal.disabled = true;
         chkCal.checked = false;
-
-        // [New] 야간 근무 시 일근자 체크 해제
-        uncheckDayShiftWorkers();
     }
 
-    // [New] 주간 모드로 변경 시 -> 체크 복구
-    if (isDay) {
-        checkDayShiftWorkers();
-    }
+    // 주간/야간 모드에 따른 일근자 상태 업데이트 (근태 데이터 최우선 참조)
+    updateDayShiftWorkers(isDay);
 
     enableDriverSelects(!isDay);
 
@@ -1665,6 +2523,21 @@ function toggleDrinkCalibration() {
     }
 }
 
+// --- 근태 상태 파싱 헬퍼 함수 ---
+function parseGuntaeStatus(entry) {
+    if (!entry) return { isAttending: false, reason: '' };
+    const worktime = (entry.WORKTIME || '').trim();
+    const guntaeName = entry.GUNTAENAME || '-';
+
+    if (guntaeName !== '-') {
+        return { isAttending: false, reason: guntaeName }; // 사유 있음 (휴가 등)
+    } else if (worktime !== '') {
+        return { isAttending: true, reason: '' }; // 정상 출근
+    } else {
+        return { isAttending: false, reason: '' }; // 비근무
+    }
+}
+
 function renderWorkLogWorkerList() {
     const container = document.getElementById('work-log-worker-list');
 
@@ -1718,11 +2591,25 @@ function renderWorkLogWorkerList() {
         row.dataset.name = worker.name;
         row.dataset.isManager = worker.isManager;
 
-        // [State Preservation] 저장된 상태가 있으면 사용, 없으면 기본값 (모두 체크)
+        // [State Preservation] 저장된 상태가 있으면 사용, 없으면 guntaeData 또는 기본값
         const saved = savedState[worker.id];
-        const isChecked = saved ? saved.checked : true;
-        const savedNote = saved ? saved.note : '';
-        const savedDriver = saved ? saved.driver : '';
+        let isChecked = true;
+        let savedNote = '';
+        let savedDriver = '';
+
+        if (saved) {
+            isChecked = saved.checked;
+            savedNote = saved.note;
+            savedDriver = saved.driver;
+        } else if (guntaeData) {
+            // 근태 데이터가 있으면 적용
+            const entry = guntaeData.find(d => d.SABUN === worker.id);
+            if (entry) {
+                const status = parseGuntaeStatus(entry);
+                isChecked = status.isAttending;
+                savedNote = status.reason;
+            }
+        }
 
         // Dynamic Driver Column
         const isDay = document.querySelector('input[name="work-type"][value="day"]').checked;
@@ -1778,6 +2665,47 @@ function renderWorkLogWorkerList() {
     enableDriverSelects(!isDay);
 }
 
+// 근태 조회 결과를 작업자 목록에 적용
+function applyGuntaeData(data) {
+    if (!data || !Array.isArray(data)) return;
+
+    const container = document.getElementById('work-log-worker-list');
+    if (!container) return;
+
+    const isDay = document.querySelector('input[name="work-type"][value="day"]').checked;
+
+    const rows = container.querySelectorAll('.worker-row');
+    rows.forEach(row => {
+        const workerId = row.dataset.id;
+        const entry = data.find(d => d.SABUN === workerId);
+        if (!entry) return;
+
+        const chk = row.querySelector('.w-chk');
+        const note = row.querySelector('.w-note');
+        if (!chk || !note) return;
+
+        if (!isDay && row.dataset.team === '일근') {
+            // 야간 근무 시 일근자는 근태와 무관하게 무조건 체크 해제 및 사유 비움
+            chk.checked = false;
+            note.value = '';
+        } else {
+            const status = parseGuntaeStatus(entry);
+            chk.checked = status.isAttending;
+            note.value = status.reason;
+        }
+    });
+
+    // 상태 라벨 표시
+    const statusLabel = document.getElementById('worker-search-status');
+    if (statusLabel) {
+        statusLabel.style.display = 'inline';
+        statusLabel.textContent = '근태조회완료';
+    }
+
+    updateWorkerStats();
+}
+
+
 function enableDriverSelects(enable) {
     document.querySelectorAll('.w-drive').forEach(el => {
         el.disabled = !enable;
@@ -1823,22 +2751,15 @@ function startWorkLog() {
     };
 
     // Gather Workers
-    const workers = [];
-    document.querySelectorAll('.worker-row').forEach(row => {
-        const chk = row.querySelector('.w-chk');
-        const note = row.querySelector('.w-note');
-        const drv = row.querySelector('.w-drive');
-
-        workers.push({
-            name: row.dataset.name,
-            id: row.dataset.id,
-            attend: chk.checked,
-            reason: note.value,
-            driverRole: drv.value,
-            team: row.dataset.team,
-            boss: row.dataset.isManager
-        });
-    });
+    const workers = Array.from(document.querySelectorAll('.worker-row')).map(row => ({
+        name: row.dataset.name,
+        id: row.dataset.id,
+        attend: row.querySelector('.w-chk').checked,
+        reason: row.querySelector('.w-note').value,
+        driverRole: row.querySelector('.w-drive').value,
+        team: row.dataset.team,
+        boss: row.dataset.isManager
+    }));
 
     const payload = {
         command: 'runTask',
@@ -1847,6 +2768,7 @@ function startWorkLog() {
             workType,
             options,
             safetyData,
+            safetyEdu: currentSafetyEduData || {},
             workers
         }
     };
@@ -1950,46 +2872,60 @@ function updateShiftUI(shiftData) {
 }
 
 
-function uncheckDayShiftWorkers() {
-    const listContainer = document.getElementById('work-log-worker-list');
-    if (!listContainer) return;
+function updateDayShiftWorkers(isDay) {
+    const rows = document.querySelectorAll('#work-log-worker-list .worker-row');
+    if (!rows.length) return;
 
-    // dataset.team = "일근" 인 항목 체크 해제 및 상태 저장
-    const rows = listContainer.querySelectorAll('.worker-row');
+    let changed = false;
     rows.forEach(row => {
         if (row.dataset.team === '일근') {
             const chk = row.querySelector('.w-chk');
-            if (chk && chk.checked) {
-                row.dataset.wasChecked = "true"; // 상태 저장
-                chk.checked = false;
+            if (!chk) return;
 
-                const drv = row.querySelector('.w-drive');
-                if (drv) drv.value = '';
-                updateWorkerStats();
-            }
-        }
-    });
-}
+            if (!isDay) {
+                // [야간 모드] 일근자는 근무하지 않으므로 사유 없이 무조건 체크 해제
+                if (chk.checked) {
+                    row.dataset.wasChecked = "true"; // 주간으로 돌아갈 때를 대비해 상태 저장
+                    chk.checked = false;
+                    const drv = row.querySelector('.w-drive');
+                    if (drv) drv.value = '';
+                    changed = true;
+                }
+                const note = row.querySelector('.w-note');
+                if (note && note.value !== '') {
+                    note.value = '';
+                }
+            } else {
+                // [주간 모드] 일근자 체크 복구 시, 근태 데이터를 최우선으로 판단
+                let shouldCheck = true;
 
-function checkDayShiftWorkers() {
-    const listContainer = document.getElementById('work-log-worker-list');
-    if (!listContainer) return;
+                // 1순위: 조회된 근태 데이터 (WORKTIME 및 GUNTAENAME 기준)
+                if (typeof guntaeData !== 'undefined' && guntaeData !== null) {
+                    const entry = guntaeData.find(d => d.SABUN === row.dataset.id);
+                    if (entry) {
+                        const status = parseGuntaeStatus(entry);
+                        shouldCheck = status.isAttending;
 
-    const rows = listContainer.querySelectorAll('.worker-row');
-    rows.forEach(row => {
-        if (row.dataset.team === '일근') {
-            const chk = row.querySelector('.w-chk');
-            // 이전에 체크되어 있었던 경우만 복구 (또는 기본적으로 모두 체크)
-            if (chk && !chk.checked) {
-                // 복구: 이전에 자동 해제되었거나(wasChecked), 명시적 해제 기록이 없는 경우
-                if (row.dataset.wasChecked === "true" || !row.hasAttribute('data-was-checked')) {
-                    chk.checked = true;
+                        // 휴가 등의 사유가 있다면 note(사유칸)도 같이 업데이트
+                        const note = row.querySelector('.w-note');
+                        if (note && status.reason) note.value = status.reason;
+                    }
+                }
+                // 2순위: 근태 데이터가 아직 없다면 과거 상태(wasChecked) 참고
+                else {
+                    shouldCheck = (row.dataset.wasChecked === "true" || !row.hasAttribute('data-was-checked'));
+                }
+
+                // 실제 체크 상태와 판단 결과가 다르면 갱신
+                if (chk.checked !== shouldCheck) {
+                    chk.checked = shouldCheck;
+                    changed = true;
                 }
             }
         }
     });
 
-    updateWorkerStats();
+    if (changed) updateWorkerStats();
 }
 
 
@@ -2004,17 +2940,6 @@ function openERPWorkerModal() {
         return;
     }
 
-    // [New Logic] Check Substation Type & Trigger Pre-Check
-    const uid = selectedUserId;
-    if (uid && appConfig.appSettings && appConfig.appSettings.locations) {
-        const locData = appConfig.appSettings.locations.find(l => l.name === selectedERPLocation);
-        if (locData && locData.type === '변전소') {
-            // Trigger AHK Pre-Check (Async/Blocking handled by AHK MsgBox)
-            sendMessageToAHK({ command: 'checkSubstation', location: selectedERPLocation });
-            // Note: If AHK shows a blocking MsgBox, the WebView might pause or waiting
-            // user interaction on the AHK side.
-        }
-    }
 
     const modal = document.getElementById('erp-worker-modal');
     modal.style.display = 'flex';
@@ -2367,6 +3292,7 @@ function saveTrackPreset() {
         trackType: getVal('ta-track-type'),
         trackCutoff: document.getElementById('ta-track-cutoff') ? document.getElementById('ta-track-cutoff').checked : false,
         agreementNo: getVal('ta-agreement-no'),
+        agreementNoDate: new Date().toISOString().slice(0, 10),
         totalCount: getVal('ta-total-count'),
         stationInput: document.getElementById('ta-station-input') ? document.getElementById('ta-station-input').checked : false
     };
@@ -2446,6 +3372,32 @@ function deleteTrackPreset() {
 }
 
 function runTrackAccessTask() {
+    // 협의번호 갱신 필요 여부 체크
+    let needsRenewal = false;
+    const today = new Date();
+
+    // 이번 달의 마지막 날짜 구하기 (윤달 등 반영)
+    const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+    const isLastDay = today.getDate() === lastDay;
+
+    if (today.getDate() <= 15 || isLastDay) {
+        const sel = document.getElementById('track-preset-sel');
+        const presetKey = sel ? sel.value : '';
+        if (presetKey && presetKey !== '__NEW__') {
+            const presets = getUserPresets('track');
+            const preset = presets[presetKey];
+            if (preset && preset.agreementNoDate) {
+                const diff = (today - new Date(preset.agreementNoDate)) / (1000 * 60 * 60 * 24);
+                if (diff > 15) needsRenewal = true;
+            } else if (preset && !preset.agreementNoDate && preset.agreementNo) {
+                needsRenewal = true;
+            }
+        }
+    }
+    if (needsRenewal) {
+        alert('협의번호 갱신이 필요합니다.\n 매크로 진행 중 협의번호를 확인 후 입력박스에 입력해 주세요.');
+    }
+
     const data = {
         workType: getVal('ta-work-type'),
         content: getVal('ta-work-content'),
@@ -2467,7 +3419,8 @@ function runTrackAccessTask() {
         line: getVal('ta-line'),
         trackType: getVal('ta-track-type'),
         trackCutoff: document.getElementById('ta-track-cutoff') ? document.getElementById('ta-track-cutoff').checked : false,
-        agreementNo: getVal('ta-agreement-no'),
+        agreementNo: needsRenewal ? '' : getVal('ta-agreement-no'),
+        needsRenewal: needsRenewal,
         totalCount: getVal('ta-total-count'),
         stationInput: document.getElementById('ta-station-input') ? document.getElementById('ta-station-input').checked : false
     };
@@ -2708,8 +3661,13 @@ function loadPresetDetail() {
 
 function addGeneralWorkRow(data = {}) {
     const tbody = document.querySelector('#general-work-table tbody');
+
+    const toggle = document.getElementById('fps-general-work-toggle');
+    const isNight = toggle ? toggle.checked : false;
+    const currentShift = isNight ? '야간' : '주간';
+
     const rowData = Object.keys(data).length > 0 ? data : {
-        workType: '주간',
+        workType: currentShift,
         category: '전체',
         content: '',
         manager: '',
@@ -2718,16 +3676,17 @@ function addGeneralWorkRow(data = {}) {
     };
 
     const tr = document.createElement('tr');
+    tr.dataset.workType = rowData.workType;
+    if (rowData.workType !== currentShift) {
+        tr.style.display = 'none';
+    }
 
     // Options
-    const workTypes = ['주간', '야간'];
     const categories = ['전체', '내부업무', '점검업무', '유지보수', '협조사항'];
 
-    const workOpts = workTypes.map(t => `<option value='${t}' ${rowData.workType === t ? 'selected' : ''}>${t}</option>`).join('');
     const catOpts = categories.map(c => `<option value='${c}' ${rowData.category === c ? 'selected' : ''}>${c}</option>`).join('');
 
     tr.innerHTML = `
-        <td><select>${workOpts}</select></td>
         <td><select>${catOpts}</select></td>
         <td><input type='text' value='${rowData.content || ''}' placeholder='내용'></td>
         <td><input type='text' value='${rowData.manager || ''}' placeholder='책임자'></td>
@@ -2736,6 +3695,31 @@ function addGeneralWorkRow(data = {}) {
         <td class='center'><button class='small-btn danger' onclick='this.closest("tr").remove()'>X</button></td>
     `;
     tbody.appendChild(tr);
+}
+
+function toggleGeneralWorkShift() {
+    const toggle = document.getElementById('fps-general-work-toggle');
+    const isNight = toggle ? toggle.checked : false;
+    const currentShift = isNight ? '야간' : '주간';
+
+    const lblDay = document.getElementById('lbl-gw-day');
+    const lblNight = document.getElementById('lbl-gw-night');
+
+    if (isNight) {
+        if (lblDay) lblDay.classList.remove('bold-active');
+        if (lblNight) lblNight.classList.add('bold-active');
+    } else {
+        if (lblDay) lblDay.classList.add('bold-active');
+        if (lblNight) lblNight.classList.remove('bold-active');
+    }
+
+    document.querySelectorAll('#general-work-table tbody tr').forEach(row => {
+        if (row.dataset.workType === currentShift) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    });
 }
 
 function saveAutoInputSettings() {
@@ -2750,6 +3734,7 @@ window.loadPresetDetail = loadPresetDetail;
 window.addGeneralWorkRow = addGeneralWorkRow;
 window.saveAutoInputSettings = saveAutoInputSettings;
 window.formatTime = formatTime;
+window.toggleGeneralWorkShift = toggleGeneralWorkShift;
 
 // [Refactor] 통합 UI 갱신 함수 (Hot Reload 지원)
 // 설정 변경 후 호출되어 각 화면의 요소를 강제로 최신화합니다.
@@ -2768,6 +3753,7 @@ function refreshUI() {
     // 3. ERP 점검: 장소 목록 및 오더번호 갱신
     // 탭이 그 때 활성화되어 있지 않더라도 DOM을 갱신해두면 나중에 탭 진입 시 최신 상태가 보입니다.
     renderERPCheck();
+    updateToggleStyle();
 
     // 4. 프리셋 목록 갱신 (선로출입/차량일지)
     // 설정에서 프리셋이 변경되었을 때 반영하기 위해 갱신합니다.
@@ -2804,55 +3790,171 @@ function importWorkersFromHeadless() {
     }, 10000);
 }
 
-// 수신된 작업자 명단 처리
-function handleWorkerListUpdate(newWorkers) {
-    if (!newWorkers || !Array.isArray(newWorkers)) return;
+function importLocationsFromHeadless() {
+    const uid = selectedUserId;
+    if (!uid) return;
 
-    // 기존 테이블 데이터 스캔 (중복 방지)
-    const existingIds = new Set();
-    document.querySelectorAll('#worker-table tbody tr').forEach(row => {
+    const user = appConfig.users[uid];
+    const arbpl = (user.profile && user.profile.arbpl) ? user.profile.arbpl : "";
+
+    if (!arbpl) {
+        showNativeMsgBox("분소 정보가 설정되지 않았습니다. [내 정보] 탭에서 분소를 선택해주세요.");
+        return;
+    }
+
+    const btn = document.getElementById('btn-import-locations');
+    if (btn) btn.disabled = true;
+
+    sendMessageToAHK({ command: 'importLocations', arbpl: arbpl });
+
+    setTimeout(() => {
+        if (btn && btn.disabled) {
+            btn.disabled = false;
+        }
+    }, 10000);
+}
+
+// 수신된 작업자 명단 처리
+async function handleWorkerListUpdate(newWorkers) {
+    if (!Array.isArray(newWorkers) || newWorkers.length === 0) return;
+
+    const tbody = document.querySelector('#worker-table tbody');
+    const existingTableRows = Array.from(tbody.querySelectorAll('tr'));
+    const existingRows = new Map();
+    existingTableRows.forEach(row => {
         const idInput = row.querySelector('input[placeholder="사번"]');
         if (idInput && idInput.value) {
-            existingIds.add(idInput.value);
+            existingRows.set(idInput.value.trim(), row);
         }
     });
 
+    const incomingIds = new Set(newWorkers.map(w => String(w['사번'] || '').trim()).filter(Boolean));
+    if (incomingIds.size === 0) return;
+    const missingRows = existingTableRows.filter(row => {
+        const id = row.querySelector('input[placeholder="사번"]')?.value.trim() || '';
+        return !incomingIds.has(id);
+    });
+    let deleteConfirmed = false;
+    if (missingRows.length > 0) {
+        const list = missingRows.map(row => {
+            const name = row.querySelector('input[placeholder="이름"]')?.value.trim() || '(이름 없음)';
+            const id = row.querySelector('input[placeholder="사번"]')?.value.trim() || '사번 없음';
+            return `• ${name} (${id})`;
+        }).join('\n');
+        deleteConfirmed = await requestWorkerDeletionConfirmation(
+            `조회되지 않은 작업자 ${missingRows.length}명:\n\n${list}\n\n확인을 누르면 위 작업자를 목록에서 삭제합니다.`
+        );
+    }
+
     let addedCount = 0;
-    const tbody = document.querySelector('#worker-table tbody');
+    let updatedCount = 0;
+    let managerRow = null;
 
     newWorkers.forEach(w => {
-        // AHK Map keys: "사번", "이름", "휴가종류", "근무조"
-        const id = w["사번"];
+        const id = String(w["사번"] || '').trim();
         const name = w["이름"];
         const team = w["근무조"];
+        const isManager = String(w["직책"] || '').trim() === '분소장';
+        const rawPhone = String(w["전화번호"] || '').replace(/\D/g, '');
+        const phone = /^01\d{9}$/.test(rawPhone)
+            ? rawPhone.replace(/^(\d{3})(\d{4})(\d{4})$/, '$1-$2-$3')
+            : '';
         // const vacation = w["휴가종류"]; // 비고란엔 넣지 않음 (요청사항 없음, 필요 시 추가)
 
-        if (id && !existingIds.has(id)) {
+        if (id && existingRows.has(id)) {
+            const row = existingRows.get(id);
+            const nameInput = row.querySelector('input[placeholder="이름"]');
+            const phoneInput = row.querySelector('input[placeholder="   -    -    "]');
+            // Repair names corrupted by the previous WinHTTP decoding path.
+            if (nameInput && !/[가-힣]/.test(nameInput.value)
+                && /[ìëêí]/.test(nameInput.value) && /[가-힣]/.test(name)) {
+                nameInput.value = name;
+                updatedCount++;
+            }
+            if (phoneInput && !phoneInput.value && phone) {
+                phoneInput.value = phone;
+                updatedCount++;
+            }
+            if (isManager) managerRow = row;
+        } else if (id) {
             // 새 작업자 추가
             addWorkerRowToTable(tbody, {
                 name: name,
                 id: id,
                 team: team,
-                phone: '',
-                isManager: 0,
+                phone: phone,
+                isManager: isManager ? 1 : 0,
                 driverRole: '-'
             });
+            if (isManager) managerRow = tbody.lastElementChild;
             addedCount++;
         }
     });
 
-    if (addedCount > 0) {
+    if (managerRow) {
+        tbody.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+            const shouldCheck = checkbox.closest('tr') === managerRow;
+            if (checkbox.checked !== shouldCheck) {
+                checkbox.checked = shouldCheck;
+                updatedCount++;
+            }
+        });
+    }
+
+    if (deleteConfirmed) missingRows.forEach(row => row.remove());
+
+    if (addedCount > 0 || updatedCount > 0 || (deleteConfirmed && missingRows.length > 0)) {
         autoSaveSettings(); // 데이터 변경 저장
 
         // Auto scroll
         const contentArea = document.querySelector('.settings-content-area');
         if (contentArea) contentArea.scrollTop = contentArea.scrollHeight;
     } else {
-        showNativeMsgBox("추가할 새로운 분소원이 없습니다.");
+        showNativeMsgBox(missingRows.length > 0 && !deleteConfirmed
+            ? "작업자 삭제를 취소했습니다."
+            : "변경할 분소원 정보가 없습니다.");
     }
 
     const btn = document.getElementById('btn-import-workers');
     if (btn) btn.disabled = false;
 }
 
+// 수신된 점검장소 처리
+function handleLocationListUpdate(newLocations) {
+    if (!newLocations || !Array.isArray(newLocations)) return;
+
+    const existingOrders = new Set();
+    document.querySelectorAll('#location-table tbody tr').forEach(row => {
+        const orderInput = row.querySelector('input[placeholder="오더번호"]');
+        if (orderInput && orderInput.value) {
+            existingOrders.add(String(orderInput.value).trim());
+        }
+    });
+
+    let addedCount = 0;
+    const tbody = document.querySelector('#location-table tbody');
+
+    newLocations.forEach(loc => {
+        const orderId = String(loc.order || "").trim();
+        // 중복 오더번호 제외 (값이 있는 경우에만 체크)
+        if (orderId && existingOrders.has(orderId)) return;
+
+        if (orderId) {
+            existingOrders.add(orderId);
+        }
+
+        // 새 row 추가 (기존 addLocationRowToTable 활용)
+        addLocationRowToTable(tbody, loc);
+        addedCount++;
+    });
+
+    if (addedCount > 0) {
+        autoSaveSettings();
+    }
+
+    const btn = document.getElementById('btn-import-locations');
+    if (btn) btn.disabled = false;
+}
+
 window.importWorkersFromHeadless = importWorkersFromHeadless;
+window.importLocationsFromHeadless = importLocationsFromHeadless;

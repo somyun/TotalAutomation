@@ -1,53 +1,16 @@
 #Requires AutoHotkey v2.0
-#Include Lib\Chrome.ahk
 #Include Lib\JSON.ahk
 
 class HeadlessAutomation {
 
-    ChromeInst := ""
-    PageInst := ""
-    DebugPort := 9222
-    epWorklogPath := "/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.erp.work_log.WorkLogDtlData"
-    logFunc := ""
-
     ; ==========================================================================
-    ; 생성자: 이미 실행된 브라우저(Port 9222)에 연결만 수행
+    ; 생성자: HTTP 클라이언트 모드
     ; ==========================================================================
     __New(headless := true, logger := "") {
         this.logFunc := logger
-        this._Log("브라우저 연결 시도 (Port: " this.DebugPort ")...")
-
-        try {
-            ; 중요: Chrome.ahk 초기화 시 'Chrome 실행 파일 경로'와 'headless=true'를 명시해야 함.
-            ; 실행은 Python이 하지만, Chrome.ahk가 내부적으로 정보를 필요로 할 수 있음.
-            chromePath := "C:\Program Files\Google\Chrome\Application\Chrome.exe"
-
-            ; Connect Only Mode (프로필 경로 비워둠, Flags 비워둠)
-            ; 4번째 인자: DebugPort, 6번째 인자: Headless 여부
-            this.ChromeInst := Chrome("", "", chromePath, this.DebugPort, , headless)
-
-            ; 페이지 인스턴스 확보
-            try {
-                this.PageInst := this.ChromeInst.GetPage()
-            } catch {
-                this.PageInst := this.ChromeInst.NewPage()
-            }
-
-            if !this.PageInst
-                throw Error("페이지 인스턴스를 찾을 수 없습니다.")
-
-            ; 봇 탐지 회피용 JS (안전장치)
-            try {
-                this.PageInst.Evaluate("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            }
-
-        } catch as e {
-            this._Log("브라우저 연결 실패: " e.Message)
-            throw e
-        }
     }
 
-    ; Connect 메서드 (Main에서 호출됨)
+    ; Connect 메서드 (호환성 유지)
     static Connect(logger := "") {
         return HeadlessAutomation(true, logger)
     }
@@ -58,11 +21,136 @@ class HeadlessAutomation {
     }
 
     ; ==============================================================================
-    ; 종료 로직
+    ; 금일 일지 번호 조회 (HTTP)
+    ; ==============================================================================
+    GetTodayWorkLogNumber(sabun, deptCode, targetDate := "") {
+
+        if (targetDate == "") {
+        ; 로그인 유저의 근무조를 기반으로 근무기준일 결정
+        userTeam := ConfigManager.CurrentUser.Has("team")
+                    ? ConfigManager.CurrentUser["team"] : ""
+
+        if (userTeam != "") {
+            context := WorkLogManager.GetCurrentContext(userTeam)
+            targetDate := context["date"]  ; 근무기준일 반환
+        } else {
+            ; 팀 정보 없을 때만 기존 로직 폴백
+            targetDate := FormatTime(DateAdd(A_Now, -9, "Hours"), "yyyyMMdd")
+        }
+    }
+
+        this._Log("일지 번호 조회 시작... (" targetDate ", " deptCode ")")
+
+        ; 1. 날짜 포맷 변환 (YYYY-MM-DD -> YYYYMMDD)
+        targetDateSimple := StrReplace(targetDate, "-", "")
+
+        ; 2. Payload 구성
+        ; WorkLogData는 x-www-form-urlencoded 방식을 사용함
+        payloadStr := "start=0&limit=25&forumId=4&I_ARWRK=5010"
+            . "&I_ARBPL=" deptCode
+            . "&I_WERKS=5010"
+            . "&I_GIJUNDF=" targetDateSimple
+            . "&I_GIJUNDT=" targetDateSimple
+            . "&I_SANGTAE="
+            . "&I_ARBPL01=" deptCode
+
+        loop 15 {
+            payloadStr .= "&I_ARBPL" . Format("{:02}", A_Index + 1) . "="
+        }
+
+        url :=
+            "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.erp.work_log.WorkLogData"
+
+        ; 3. 요청 전송 및 재시도 로직 (최대 2회)
+        loop 2 {
+            responseText := this._SendRequest(payloadStr, url, "application/x-www-form-urlencoded; charset=UTF-8")
+
+            if (responseText != "") {
+                try {
+                    resObj := JSON.parse(responseText)
+                    if (resObj.Has("ZPM_RFC_REPORT_ZTPM1000_LIST")) {
+                        list := resObj["ZPM_RFC_REPORT_ZTPM1000_LIST"]
+                        if (list.Length > 0) {
+                            iljino := list[1]["ILJINO"]
+                            this._Log("일지번호 발견 (" A_Index "회차): " iljino)
+                            return iljino
+                        }
+                    }
+                } catch as e {
+                    this._Log("일지번호 파싱 중 오류: " e.Message)
+                }
+            }
+
+            ; 1차 실패 시 사용자에게 알린 후 1초 대기 후 재시도
+            if (A_Index == 1) {
+                this._Log("일지번호 조회 1차 실패. 사용자 알림 후 재시도 대기...")
+                LogDebug("[오류] 오늘자 업무일지 번호 조회 1차 실패 (MsgBox 표시)")
+                MsgBox("오늘자 업무일지 번호를 찾는 데 실패했습니다. (서버 지연 가능성)`n`n한 번 더 조회를 시도합니다", "일지번호 조회 실패", "Icon!")
+                Sleep 1000
+            }
+        }
+
+        this._Log("일지 목록이 비어있거나, 응답 최종 실패")
+        return ""
+    }
+
+    ; ==============================================================================
+    ; 종료 로직 (HTTP 모드에서는 특별한 정리 필요 없음)
     ; ==============================================================================
     Close(killBrowser := false) {
-        if (this.ChromeInst) {
-            this.ChromeInst := ""
+        ; No-op
+    }
+
+    ; ==============================================================================
+    ; 공통 HTTP 요청 함수 (WinHttp API 사용)
+    ; ==============================================================================
+
+    _SendRequest(payload, url, contentType := "", referer := "", responseEncoding := "") {
+        try {
+            finalContentType := contentType
+            finalPayload := payload
+            if (finalContentType == "") {
+                if (IsObject(payload)) {
+                    finalContentType := "application/json; charset=UTF-8"
+                    finalPayload := JSON.stringify(payload)
+                } else {
+                    finalContentType := "application/x-www-form-urlencoded; charset=UTF-8"
+                }
+            } else {
+                if IsObject(payload)
+                    finalPayload := JSON.stringify(payload)
+            }
+
+            headers := Map(
+                "Content-Type", finalContentType,
+                "Accept", "application/json, text/javascript, */*; q=0.01",
+                "Accept-Language", "ko,en;q=0.9,en-US;q=0.8",
+                "X-Requested-With", "XMLHttpRequest"
+            )
+            if (referer != "") {
+                headers["Referer"] := referer
+                if RegExMatch(referer, "^(https?://[^/]+)", &m)
+                    headers["Origin"] := m[1]
+            }
+
+            response := SessionManager.Request("POST", url, finalPayload, headers)
+            if (responseEncoding != "") {
+                ; WinHTTP ResponseText can misdecode UTF-8 ERP JSON as Latin-1.
+                stream := ComObject("ADODB.Stream")
+                stream.Type := 1 ; binary
+                stream.Open()
+                stream.Write(response.Body)
+                stream.Position := 0
+                stream.Type := 2 ; text
+                stream.Charset := responseEncoding
+                decoded := stream.ReadText()
+                stream.Close()
+                return decoded
+            }
+            return response.Text
+        } catch as e {
+            this._Log("Error: 통합 세션 통신 실패 - " e.Message)
+            throw e
         }
     }
 
@@ -70,7 +158,7 @@ class HeadlessAutomation {
     ; 전체 근무자/근태 정보 조회
     ; ==============================================================================
     GetWorkerList(arbpl) {
-        this._Log("전체 근무자 정보 조회 시작 (작업장: " arbpl ")")
+        this._Log("전체 근무자 정보 조회 시작 (작업장: " arbpl ", HTTP)")
 
         ; 날짜 계산
         targetDate := FormatTime(A_Now, "yyyyMMdd")
@@ -79,42 +167,19 @@ class HeadlessAutomation {
         if (FormatTime(A_Now, "HHmm") < "0830")
             targetDate := FormatTime(DateAdd(A_Now, -1, "days"), "yyyyMMdd")
 
-        dateStrToday := FormatTime(targetDate, "yyyyMMdd")
+        payload := Map(
+            "AJAX_TYPE", [Map(
+                "MODE", "OPN", "TYPE", "PSN",
+                "I_ARBPL", arbpl, "I_WERKS", "5010", "I_GIJUND", targetDate
+            )]
+        )
 
-        jsCode := "
-        (
-            const payload = {
-                AJAX_TYPE: [{
-                    MODE: 'OPN', TYPE: 'PSN',
-                    I_ARBPL: arbpl, I_WERKS: '5010', I_GIJUND: today
-                }]
-            };
+        ; Referer: WorkLogPerson
+        responseText := this._SendRequest(payload,
+            "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.erp.work_log.WorkLogDtlData",
+            "application/x-www-form-urlencoded", , "utf-8")
 
-            fetch(url, {
-                method: 'POST', credentials: 'include',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest' },
-                body: JSON.stringify(payload)
-            })
-            .then(r => r.text())
-            .then(txt => { window._ahk_vac_res = txt; window._ahk_vac_done = true; })
-            .catch(err => { window._ahk_vac_res = 'ERROR:' + err; window._ahk_vac_done = true; });
-        )"
-
-        RunJS := "window._ahk_vac_res = ''; window._ahk_vac_done = false; "
-        RunJS .= "(function(arbpl, today, url) { " . jsCode . " })"
-        RunJS .= "('" . arbpl . "', '" . dateStrToday . "', '" . this.epWorklogPath . "');"
-
-        this.PageInst.Evaluate(RunJS)
-
-        loop 40 {
-            if (this.EvaluateSafe("window._ahk_vac_done") == 1)
-                break
-            Sleep 250
-        }
-
-        responseText := this.EvaluateSafe("window._ahk_vac_res")
-        if (responseText == "" || InStr(responseText, "ERROR:")) {
-            this._Log("근무자 조회 실패: " responseText)
+        if (responseText == "") {
             return []
         }
 
@@ -132,11 +197,15 @@ class HeadlessAutomation {
                     name := item.Has("SMNAM") ? item["SMNAM"] : ""
                     sagot := item.Has("SAGOT") ? item["SAGOT"] : ""
                     gubunt := item.Has("GUBUNT") ? item["GUBUNT"] : ""
+                    phone := item.Has("USRID") ? item["USRID"] : ""
+                    position := item.Has("SHORT") ? item["SHORT"] : ""
 
                     if (empno != "") {
                         workerRecords.Push(Map(
                             "사번", empno,
                             "이름", name,
+                            "전화번호", phone,
+                            "직책", position,
                             "휴가종류", sagot,
                             "근무조", gubunt
                         ))
@@ -156,7 +225,7 @@ class HeadlessAutomation {
     ; 오더 목록 조회
     ; ==============================================================================
     GetOrderList(arbpl) {
-        this._Log("오더 목록 조회 요청 (" arbpl ")...")
+        this._Log("오더 목록 조회 요청 (" arbpl ", HTTP)...")
 
         ; 날짜 계산
         targetDate := FormatTime(A_Now, "yyyyMMdd")
@@ -169,44 +238,20 @@ class HeadlessAutomation {
             tomorrow := FormatTime(A_Now, "yyyyMMdd")
         }
 
-        jsCode := "
-        (
-            const payload = {
-                AJAX_TYPE: [{
-                    MODE: 'OPN', TYPE: 'SPC', RFC_NAME: 'ZPM_RFC_REPORT_AFRU_LIST',
-                    I_ARBPL: arbpl, I_WERKS: '5010', I_FRDAY: today,
-                    I_FRTIME: '090000', I_TODAY: tomorrow, I_TOTIME: '085900'
-                }]
-            };
+        payload := Map(
+            "AJAX_TYPE", [Map(
+                "MODE", "OPN", "TYPE", "SPC", "RFC_NAME", "ZPM_RFC_REPORT_AFRU_LIST",
+                "I_ARBPL", arbpl, "I_WERKS", "5010", "I_FRDAY", targetDate,
+                "I_FRTIME", "090000", "I_TODAY", tomorrow, "I_TOTIME", "085900"
+            )]
+        )
 
-            fetch(url, {
-                method: 'POST', credentials: 'include',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest' },
-                body: JSON.stringify(payload)
-            })
-            .then(r => r.text())
-            .then(txt => { window._ahk_ep_res = txt; window._ahk_ep_done = true; })
-            .catch(err => { window._ahk_ep_res = 'ERROR:' + err; window._ahk_ep_done = true; });
-        )"
+        ; Referer: WorkLogSpec
+        responseText := this._SendRequest(payload,
+            "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.erp.work_log.WorkLogDtlData",
+            "application/x-www-form-urlencoded")
 
-        RunJS := "window._ahk_ep_res = ''; window._ahk_ep_done = false; "
-        RunJS .= "(function(arbpl, today, tomorrow, url) { " . jsCode . " })"
-        RunJS .= "('" . arbpl . "', '" . targetDate . "', '" . tomorrow . "', '" . this.epWorklogPath . "');"
-
-        this.PageInst.Evaluate(RunJS)
-
-        ; 결과 대기
-        loop 40 {
-            val := this.EvaluateSafe("window._ahk_ep_done")
-            if (val == 1 || val == "true")
-                break
-            Sleep 250
-        }
-
-        responseText := this.EvaluateSafe("window._ahk_ep_res")
-
-        if (responseText == "" || InStr(responseText, "ERROR:")) {
-            this._Log("오더 조회 실패: " responseText)
+        if (responseText == "") {
             return []
         }
 
@@ -228,17 +273,128 @@ class HeadlessAutomation {
     }
 
     ; ==============================================================================
-    ; [Helper] EvaluateSafe (Map 처리 포함)
+    ; 점검장소 목록 조회 (Import)
     ; ==============================================================================
-    EvaluateSafe(js) {
-        try {
-            res := this.PageInst.Evaluate(js)
-            if (IsObject(res) && res.Has("value"))
-                return res["value"]
-            return String(res)
-        } catch {
-            return ""
+    GetImportLocations(arbpl) {
+        this._Log("점검장소 목록 조회 요청 (" arbpl ", HTTP)...")
+
+        ; 날짜 계산
+        frDayStr := FormatTime(DateAdd(A_Now, -4, "days"), "yyyyMMdd")
+        toDayStr := FormatTime(DateAdd(A_Now, -1, "days"), "yyyyMMdd")
+
+        payload := Map(
+            "AJAX_TYPE", [Map(
+                "MODE", "OPN", "TYPE", "SPC", "RFC_NAME", "ZPM_RFC_REPORT_AFRU_LIST",
+                "I_ARBPL", arbpl, "I_WERKS", "5010", "I_FRDAY", frDayStr,
+                "I_FRTIME", "090000", "I_TODAY", toDayStr, "I_TOTIME", "085900"
+            )]
+        )
+
+        responseText := this._SendRequest(payload,
+            "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.erp.work_log.WorkLogDtlData",
+            "application/x-www-form-urlencoded")
+
+        locations := []
+        if (responseText == "") {
+            return locations
         }
+
+        try {
+            result := JSON.parse(responseText)
+            if (result.Has("ZPM_RFC_REPORT_AFRU_LIST")) {
+                listData := result["ZPM_RFC_REPORT_AFRU_LIST"]
+                for item in listData {
+                    auart := item.Has("AUART") ? item["AUART"] : ""
+                    if !(auart == "PM01" || auart == "PM03")
+                        continue
+
+                    aufnr := item.Has("AUFNR") ? item["AUFNR"] : ""
+                    order := LTrim(aufnr, "0")
+
+                    ktext := item.Has("KTEXT") ? item["KTEXT"] : ""
+                    erdat := item.Has("ERDAT") ? item["ERDAT"] : ""
+
+                    erdatRaw := RegExReplace(erdat, "-")
+                    if (erdatRaw == "")
+                        erdatRaw := FormatTime(A_Now, "yyyyMMdd")
+
+                    ; 19990101 기준 일수 차이 계산 후 mod 3 + 1
+                    diffDays := DateDiff(erdatRaw, "19990101", "Days")
+                    groupNum := Mod(diffDays, 3) + 1
+
+                    typeStr := ""
+                    nameStr := ""
+                    isOther := false
+
+                    if (auart == "PM01") {
+                        if RegExMatch(ktext, "i)일일.*\((\d+)KV\).*?_([^-_]+)변전소", &match) {
+                            nameStr := match[2] . match[1]
+                            typeStr := "변전소"
+                        } else if RegExMatch(ktext, "i)_([^-_]+)전기실", &match) {
+                            nameStr := match[1]
+                            typeStr := "전기실(그룹" . groupNum . ")"
+                        } else {
+                            isOther := true
+                        }
+                    } else if (auart == "PM03") {
+                        isOther := true
+                    }
+
+                    if (isOther) {
+                        cleanText := RegExReplace(ktext, "i)[가-힣]+(분소|관리소|주재소)", "")
+                        cleanText := RegExReplace(cleanText, "i)일일|일상|점검|전차선로|\(|\)|_", "")
+                        cleanText := RegExReplace(cleanText, "\s+", " ")
+                        nameStr := Trim(cleanText)
+                        typeStr := "기타업무"
+                    }
+
+                    ; 중복 필터링은 프론트에서 처리하므로 전체 반환
+                    locations.Push(Map("name", nameStr, "type", typeStr, "order", order))
+                }
+            }
+        } catch as e {
+            this._Log("점검장소 파싱 오류: " e.Message)
+        }
+
+        return locations
+    }
+
+    ; ==============================================================================
+    ; 근태 조회 (btcep)
+    ; ==============================================================================
+    GetGuntae(codeVal, dateVal) {
+        this._Log("근태 조회 시작 (부서코드: " codeVal ", 날짜: " dateVal ")")
+
+        ; dateVal 형식: "yyyy-MM-dd"
+        payload := '{"codeVal":"' codeVal '","dateVal":"' dateVal '"}'
+
+        url := "https://btcep.humetro.busan.kr/main/getDeptDetail.face"
+
+        responseText := this._SendRequest(payload, url, "application/json; charset=UTF-8"
+            , "https://btcep.humetro.busan.kr/main/Geuntae.face")
+
+        if (responseText == "") {
+            this._Log("근태 조회 실패: 응답 없음")
+            return []
+        }
+
+        result := []
+        try {
+            data := JSON.parse(responseText)
+            for item in data {
+                result.Push(Map(
+                    "SABUN", item.Has("SABUN") ? item["SABUN"] : "",
+                    "NAME1", item.Has("NAME1") ? item["NAME1"] : "",
+                    "WORKTIME", item.Has("WORKTIME") ? item["WORKTIME"] : "",
+                    "GUNTAENAME", item.Has("GUNTAENAME") ? item["GUNTAENAME"] : ""
+                ))
+            }
+            this._Log("근태 조회 완료: " result.Length "명")
+        } catch as e {
+            this._Log("근태 파싱 오류: " e.Message)
+        }
+
+        return result
     }
 }
 
@@ -249,11 +405,13 @@ class BackgroundProcessManager {
     static hWriteStdin := 0 ; Stdin Write (Parent)
     static hProcess := 0
     static LogCallback := ""
+    static OutputBuffer := ""
 
     ; 백그라운드 프로세스 실행 (Two-way Pipe)
     static Launch(cmdLine, callback) {
         this.Cleanup()
         this.LogCallback := callback
+        this.OutputBuffer := ""
 
         sa := Buffer(24, 0) ; SECURITY_ATTRIBUTES (x64)
         NumPut("UInt", 24, sa, 0)
@@ -263,6 +421,7 @@ class BackgroundProcessManager {
         ; 1. Stdout 파이프 생성 (Child Write -> Parent Read)
         hReadOut := 0, hWriteOut := 0
         if !DllCall("CreatePipe", "PtrP", &hReadOut, "PtrP", &hWriteOut, "Ptr", sa, "UInt", 0) {
+            LogDebug("[오류] Stdout 파이프 생성 실패 (MsgBox 표시)")
             MsgBox("Stdout 파이프 생성 실패")
             return false
         }
@@ -275,6 +434,7 @@ class BackgroundProcessManager {
         ; 2. Stdin 파이프 생성 (Parent Write -> Child Read)
         hReadIn := 0, hWriteIn := 0
         if !DllCall("CreatePipe", "PtrP", &hReadIn, "PtrP", &hWriteIn, "Ptr", sa, "UInt", 0) {
+            LogDebug("[오류] Stdin 파이프 생성 실패 (MsgBox 표시)")
             MsgBox("Stdin 파이프 생성 실패")
             this.Cleanup()
             return false
@@ -297,6 +457,7 @@ class BackgroundProcessManager {
 
         if !DllCall("CreateProcess", "Ptr", 0, "Str", cmdLine, "Ptr", 0, "Ptr", 0, "Int", 1, "UInt", 0x08000000, "Ptr",
             0, "Ptr", 0, "Ptr", si, "Ptr", pi) {
+            LogDebug("[오류] 프로세스 생성 실패 (MsgBox 표시). cmdLine: " cmdLine)
             MsgBox("프로세스 생성 실패")
             this.Cleanup()
             return false
@@ -318,12 +479,12 @@ class BackgroundProcessManager {
     }
 
     ; 표준 입력(Stdin)으로 데이터 전송
-    static SendInput(text) {
+    static SendInput(text, appendNewline := true) {
         if (!this.hWriteStdin)
             return false
 
         ; UTF-8 변환 (개행 문자 추가 필수)
-        if (SubStr(text, -1) != "`n")
+        if appendNewline && (SubStr(text, -1) != "`n")
             text .= "`n"
 
         bufLen := StrPut(text, "UTF-8")
@@ -353,20 +514,21 @@ class BackgroundProcessManager {
 
         ; 2. 데이터 읽기
         if (available > 0) {
-            bufsize := 1024
+            bufsize := 8096 ; [개선] 버퍼 크기 증가 (1KB -> 8KB)
             buf := Buffer(bufsize, 0)
             read := 0
 
             if DllCall("ReadFile", "Ptr", this.hReadPipe, "Ptr", buf, "UInt", bufsize, "UIntP", &read, "Ptr", 0) {
                 if (read > 0) {
-                    text := StrGet(buf, read, "CP949")
-                    lines := StrSplit(text, ["`r`n", "`n"])
-
-                    if (this.LogCallback) {
-                        for line in lines {
-                            if (line != "")
-                                this.LogCallback.Call(line)
-                        }
+                    ;text := StrGet(buf, read, "CP949")
+                    text := StrGet(buf, read, "UTF-8")
+                    ; SESSION_RESULT는 CookieJar 크기에 따라 여러 ReadFile 호출로 분할될 수 있다.
+                    ; 완성된 줄만 콜백에 넘기고 마지막 조각은 다음 읽기까지 보관한다.
+                    extracted := SessionProtocol.ExtractFrames(this.OutputBuffer, text)
+                    this.OutputBuffer := extracted.Buffer
+                    for line in extracted.Frames {
+                        if this.LogCallback
+                            this.LogCallback.Call(line)
                     }
                 }
             }
@@ -383,6 +545,17 @@ class BackgroundProcessManager {
 
     static Cleanup() {
         SetTimer ObjBindMethod(this, "CheckOutput"), 0
+
+        if (this.hProcess) {
+            exitCode := 0
+            ; 프로세스가 여전히 실행 중(STILL_ACTIVE = 259)인지 확인
+            if DllCall("GetExitCodeProcess", "Ptr", this.hProcess, "UIntP", &exitCode) {
+                if (exitCode == 259) {
+                    ; 프로세스 강제 종료 (ExitCode 1 반환)
+                    DllCall("TerminateProcess", "Ptr", this.hProcess, "UInt", 1)
+                }
+            }
+        }
 
         if (this.hReadPipe) {
             DllCall("CloseHandle", "Ptr", this.hReadPipe)
@@ -404,5 +577,6 @@ class BackgroundProcessManager {
             DllCall("CloseHandle", "Ptr", this.hProcess)
             this.hProcess := 0
         }
+        this.OutputBuffer := ""
     }
 }

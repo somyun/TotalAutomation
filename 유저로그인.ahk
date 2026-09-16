@@ -1,426 +1,565 @@
-class UserLogin {
-    static LoginUser() {
-        return this.selectAndAuthUser()
-    }
-
-    static selectAndAuthUser() {
-        loop {
-            guiObj := UserSelectionGUI()
-            selectedUser := guiObj.WaitForSubmit()
-
-            if (!selectedUser || !selectedUser.Has("id")) {
-                return false
-            }
-
-            ; 프로필 확인
-            profiles := ConfigManager.GetProfiles()
-            targetProfile := ""
-            for p in profiles {
-                if p["id"] == selectedUser["id"] {
-                    targetProfile := p
-                    break
-                }
-            }
-
-            if !targetProfile {
-                MsgBox "해당 유저 프로필을 찾을 수 없습니다.", "오류", "Iconx"
-                continue
-            }
-
-            ; 2차 비밀번호 확인
-            ; (기존 단축일지처럼 2차 비번으로 본인 인증)
-            pwBox := InputBox("2차 비밀번호를 입력하세요", "인증", "Password w250")
-            if (pwBox.Result != "OK") {
-                continue
-            }
-
-            savedPW2 := targetProfile.Has("pw2") ? targetProfile["pw2"] : ""
-
-            ; 2차 비밀번호가 설정되지 않은 경우 신규 유저로 간주하여 통과시킬 수도 있으나,
-            ; 등록 시 필수로 입력받으므로 불일치면 실패 처리
-            if (savedPW2 != "" && pwBox.Value != savedPW2) {
-                MsgBox "2차 비밀번호가 일치하지 않습니다.", "오류", "Icon!"
-                continue
-            }
-
-            ; 로그인 성공
-            ConfigManager.Set("appSettings.lastUser", targetProfile["id"]) ; ID로 저장 (이름 대신)
-            ConfigManager.CurrentUser := targetProfile
-            return true
-        }
-    }
-}
-
-class UserSelectionGUI {
-    controls := Map()
-    result := Map()
-    submitted := false
-
-    __New() {
-        this.controls["main"] := gui("", "사용자 선택")
-        this.controls["main"].SetFont("S10", "맑은 고딕")
-        this.controls["main"].Opt("-MinimizeBox -MaximizeBox")
-
-        this.controls["main"].AddText("Section", "등록된 유저:")
-        this.controls["userList"] := this.controls["main"].AddListBox("xs w200 h150")
-        this.controls["userList"].OnEvent("DoubleClick", (*) => this.onSelectUser())
-
-        ; 버튼 그룹
-        this.controls["btn_ok"] := this.controls["main"].AddButton("xs w200 h30", "로그인")
-        this.controls["btn_ok"].OnEvent("Click", (*) => this.onSelectUser())
-
-        this.controls["btn_add"] := this.controls["main"].AddButton("xs w95 h30", "유저 추가")
-        this.controls["btn_add"].OnEvent("Click", (*) => this.onAddUser())
-
-        this.controls["btn_del"] := this.controls["main"].AddButton("x+10 w95 h30", "삭제")
-        this.controls["btn_del"].OnEvent("Click", (*) => this.onDeleteUser())
-
-        this.loadUserList()
-        this.controls["main"].OnEvent("Close", (*) => this.onCancel())
-        this.controls["main"].Show("Center")
-    }
-
-    loadUserList() {
-        profiles := ConfigManager.GetProfiles()
-        this.controls["userList"].Delete()
-        lastUserId := ConfigManager.Get("appSettings.lastUser")
-
-        selectIndex := 0
-        for i, p in profiles {
-            name := p.Has("name") ? p["name"] : p["id"]
-            this.controls["userList"].Add([name " (" p["id"] ")"])
-            if (p["id"] == lastUserId)
-                selectIndex := i
-        }
-
-        if (selectIndex > 0)
-            this.controls["userList"].Choose(selectIndex)
-    }
-
-    onSelectUser() {
-        idx := this.controls["userList"].Value
-        if (idx == 0) {
-            MsgBox "유저를 선택해주세요."
-            return
-        }
-
-        profiles := ConfigManager.GetProfiles()
-        if (idx > profiles.Length)
-            return
-
-        this.result := profiles[idx] ; 1-based index
-        this.submitted := true
-        this.controls["main"].Destroy()
-    }
-
-    onAddUser() {
-        this.controls["main"].Opt("+Disabled") ; 메인창 비활성
-        regGui := UserInputGUI()
-        newUserResult := regGui.WaitForSubmit()
-        this.controls["main"].Opt("-Disabled") ; 메인창 활성
-        this.controls["main"].Show() ; 다시 포커스
-
-        if (newUserResult && newUserResult.Count > 0) {
-            newID := newUserResult["id"]
-
-            if ConfigManager.Config["users"].Has(newID) {
-                MsgBox "이미 존재하는 사번입니다: " newID, "오류", "Iconx"
-                return
-            }
-
-            ; Users 객체에 추가 (newUserResult가 이미 구조화된 Map임)
-            ConfigManager.Config["users"][newID] := newUserResult
-            ConfigManager.Save()
-            this.loadUserList()
-        }
-    }
-
-    ; 유저 삭제
-    onDeleteUser() {
-        idx := this.controls["userList"].Value
-        if (idx == 0) {
-            return
-        }
-
-        profiles := ConfigManager.GetProfiles()
-        targetProfile := profiles[idx]
-        targetID := targetProfile["id"]
-
-        if MsgBox("'" targetProfile["name"] "' 님의 정보를 삭제하시겠습니까?", "삭제 확인", "YesNo Icon?") == "Yes" {
-            ; 삭제 시 2차 비밀번호 확인
-            pwBox := InputBox("삭제하려면 2차 비밀번호를 입력하세요", "인증", "Password w250")
-            if (pwBox.Result != "OK") {
-                return
-            }
-
-            savedPW2 := targetProfile.Has("pw2") ? targetProfile["pw2"] : ""
-            if (savedPW2 != "" && pwBox.Value != savedPW2) {
-                MsgBox "2차 비밀번호가 일치하지 않습니다.", "오류", "Icon!"
-                return
-            }
-
-            ; ConfigManager에서 유저 삭제 (users 객체에서 해당 키 삭제)
-            if ConfigManager.Config.Has("users") && ConfigManager.Config["users"].Has(targetID) {
-                ConfigManager.Config["users"].Delete(targetID)
-                ConfigManager.Save()
-            }
-            this.loadUserList()
-        }
-    }
-
-    onCancel() {
-        this.result := Map()
-        this.submitted := false
-        this.controls["main"].Destroy()
-    }
-
-    WaitForSubmit() {
-        while WinExist("사용자 선택")
-            Sleep 100
-        return this.result
-    }
-}
-
-class UserInputGUI {
-    controls := Map()
-    result := Map()
-    submitted := false
-
-    __New() {
-        this.controls["main"] := Gui("+Owner", "유저 정보 등록")
-        this.controls["main"].SetFont("S10", "맑은 고딕")
-        this.controls["main"].Opt("-MinimizeBox -MaximizeBox")
-
-        mainGui := this.controls["main"]
-
-        mainGui.AddText("w120 Section", "이름 *")
-        mainGui.AddText("w120", "사번 *")
-        mainGui.AddText("w120", "통합 PW *")
-        mainGui.AddText("w120", "통합 PW 확인 *")
-        mainGui.AddText("w120", "2차 PW *")
-        mainGui.AddText("w120", "2차 PW 확인 *")
-        mainGui.AddText("w120", "SAP PW")
-        mainGui.AddText("w120", "SAP PW 확인")
-
-        this.controls["name"] := mainGui.AddEdit("ys-3 Section w120")
-        this.controls["webID"] := mainGui.AddEdit("w120 Number Limit6")
-
-        ; 근무조 자동계산 로직은 복잡하니 일단 선택으로
-        this.controls["team"] := mainGui.AddDropDownList("x+10 yp w80 Choose1", ["A조", "B조", "C조", "D조", "일근"])
-
-        this.controls["webPW1"] := mainGui.AddEdit("xs Password w210")
-        this.controls["webPW2"] := mainGui.AddEdit("Password w210")
-        this.controls["pw2_1"] := mainGui.AddEdit("Password Number Limit6 w210")
-        this.controls["pw2_2"] := mainGui.AddEdit("Password Number Limit6 w210")
-        this.controls["sapPW1"] := mainGui.AddEdit("Password w210")
-        this.controls["sapPW2"] := mainGui.AddEdit("Password w210")
-
-        ; 체크 표시용
-        this.setupPwCheck("webPW1", "webPW2")
-        this.setupPwCheck("pw2_1", "pw2_2")
-        this.setupPwCheck("sapPW1", "sapPW2")
-
-        btnSave := mainGui.AddButton("xs w210 h35", "저장")
-        btnSave.OnEvent("Click", (*) => this.onSave())
-
-        mainGui.OnEvent("Close", (*) => this.onCancel())
-        mainGui.Show("Center")
-    }
-
-    setupPwCheck(id1, id2) {
-        this.controls[id1].OnEvent("Change", (*) => this.checkMatch(id1, id2))
-        this.controls[id2].OnEvent("Change", (*) => this.checkMatch(id1, id2))
-    }
-
-    checkMatch(id1, id2) {
-        val1 := this.controls[id1].Value
-        val2 := this.controls[id2].Value
-
-        if (val1 != "" && val2 != "" && val1 == val2)
-            this.controls[id2].Opt("+cGreen")
-        else
-            this.controls[id2].Opt("+cBlack")
-    }
-
-    onSave() {
-        name := Trim(this.controls["name"].Value)
-        id := Trim(this.controls["webID"].Value)
-        team := this.controls["team"].Text
-        wp1 := this.controls["webPW1"].Value
-        wp2 := this.controls["webPW2"].Value
-        p2_1 := this.controls["pw2_1"].Value
-        p2_2 := this.controls["pw2_2"].Value
-        sp1 := this.controls["sapPW1"].Value
-        sp2 := this.controls["sapPW2"].Value
-
-        if (name == "" || id == "" || wp1 == "" || wp2 == "" || p2_1 == "" || p2_2 == "") {
-            MsgBox "필수 항목(*)을 모두 입력해주세요.", "알림"
-            return
-        }
-
-        if (wp1 != wp2) {
-            MsgBox "통합 비밀번호가 일치하지 않습니다.", "오류"
-            return
-        }
-        if (p2_1 != p2_2) {
-            MsgBox "2차 비밀번호가 일치하지 않습니다.", "오류"
-            return
-        }
-        if (sp1 != "" && sp1 != sp2) {
-            MsgBox "SAP 비밀번호가 일치하지 않습니다.", "오류"
-            return
-        }
-
-        ; 저장할 데이터 Map 생성 (ConfigManager 구조에 맞게)
-        this.result := Map(
-            "id", id,
-            "profile", Map(
-                "id", id,
-                "name", name,
-                "webPW", wp1,
-                "pw2", p2_1,
-                "sapPW", sp1,
-                "team", team,
-                "department", "호포전기분소"
-            ),
-            "hotkeys", [],
-            "presets", Map()
-        )
-
-        this.submitted := true
-        this.controls["main"].Destroy()
-    }
-
-    onCancel() {
-        this.result := Map()
-        this.submitted := false
-        this.controls["main"].Destroy()
-    }
-
-    WaitForSubmit() {
-        while WinExist("유저 정보 등록")
-            Sleep 100
-        return this.result
-    }
-}
-
 ; ==============================================================================
 ; 웹 자동 로그인 관리 클래스
 ; ==============================================================================
 class WebAutoLogin {
     static PortalURL := "https://btcep.humetro.busan.kr/portal"
     static ERP_PortalURL := "https://niw.humetro.busan.kr/erpep.jsp"
+    static Worklog_List :=
+        "http://ep.humetro.busan.kr/irj/portal?NavigationTarget=ROLES%3A%2F%2Fportal_content%2Fhumetro%2Frole%2Fmaintenance%2Frole.09%2Fworkset.07%2Fworkset.01%2Fworkset.03&sapDocumentRenderingMode=EmulateIE8"
+    ;static Worklog_List_Direct :="http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/pcd!3aportal_content!2fhumetro!2frole!2fmaintenance!2frole.09!2fworkset.07!2fworkset.01!2fworkset.03!2fiview.02?sapDocumentRenderingMode=EmulateIE8" ;헤더미포함
 
     ; ==============================================================================
     ; [메서드] EnsureReady
     ; 설명: 작업 유형에 따른 브라우저 상태를 준비합니다.
-    ; 매개변수:
-    ;   taskType - 작업 유형 ("WorkLog_Create", "WorkLog_View", "SessionCheck")
-    ; 반환값: 성공 시 해당 브라우저 UIA_browser 객체, 실패 시 false
     ; ==============================================================================
     static EnsureReady(taskType) {
         user := ConfigManager.CurrentUser
+        if (taskType == "WorkLog_Create" || taskType == "WorkLog_View")
+            LogDebug("[일지준비] EnsureReady 시작 | taskType=" taskType)
         if (!user.Has("id")) {
+            LogDebug("[오류] 로그인된 사용자가 없음 (EnsureReady)")
             MsgBox("로그인된 사용자가 없습니다. 먼저 로컬 로그인을 수행해주세요.", "오류", "Iconx")
             return false
         }
 
-        ; 1. 브라우저/세션 점검 및 로그인
-        if (taskType == "SessionCheck") {
-            ; 세션 브라우저 cUIA 반환
-            return this._PrepareSessionOnly(user)
-        }
-        else if (taskType == "WorkLog_Create") {
-            ; 세션 브라우저 cUIA 반환
-            cUIA := this._PrepareSessionOnly(user)
-            ; 해당 브라우저로 업무일지 리스트 이동
-            this._GoToWorklogList(cUIA)
-            ; 업무일지 생성 클릭
-            cUIA.WaitElement({ LocalizedType: "링크", Name: "생성" }, 5000).Invoke()
-            ; 생성된 업무일지 cUIA할당, 로딩까지 시간이 걸릴 수 있으므로 5초동안 시도
-            loop 20 {
-                if cUIA := this._FindBrowserByElement(create := true)
-                    break
-                Sleep 250
+        ; 1. 정상 조건: 쿠키 데이터가 존재하고 webPW가 있는 경우 (Headless/CDP 주입 방식)
+        if (user.Has("webPW") && user["webPW"] != "" && SessionManager.IsReady(user["id"])) {
+            if (taskType == "WorkLog_Create" || taskType == "WorkLog_View")
+                LogDebug("[일지준비] 통합 세션/CDP 경로 선택 | taskType=" taskType)
+            if (taskType == "SessionCheck") {
+                ; '선로출입관리', '승인정보불러오기' 등 XPLATFORM 구동용 세션 연동
+                return this.LaunchXPlatformSession(user)
             }
-            ; cUIA 반환
-            return cUIA
-        }
-        else if (taskType == "WorkLog_View") {
-            ; 1. 열려있는 업무일지 브라우저 탐색
-            if cUIA := this._FindBrowserByElement()
-                return cUIA
-            ; 2. 없으면 ERP 포털 또는 통합포털이 열린 브라우저 탐색 (배열 순차 탐색)
-            if cUIA := this._FindBrowserByTab(["ERP포털시스템 - 부산교통공사", ":: 부산교통공사 ::"])
-                return this._NavToWorkLogView(cUIA, user)
-            ; 3. ERP 포털도 없으면 새로 실행
-            cUIA := this._PrepareSessionOnly(user)
-            return this._NavToWorkLogView(cUIA, user)
-        }
+            else if (taskType == "WorkLog_Create") {
+                try {
+                    return this.LaunchLogSession(user, "reg", "general")
+                } catch as e {
+                    LogDebug("[오류] 업무일지 생성 화면 이동 중 오류: " e.Message)
+                    MsgBox("업무일지 생성 화면 이동 중 오류: " e.Message, "오류", "Iconx")
+                    return false
+                }
+            }
+            else if (taskType == "WorkLog_View") {
+                existingLog := this._FindBrowserByElement(false)
 
-        return true
+                if existingLog {
+                    LogDebug("[일지준비] 통합 세션 경로에서 이미 열린 조회 팝업 발견 | hwnd=" existingLog.BrowserId)
+                    ; 일지가 이미 존재 → 리스트 페이지를 먼저 준비(최대화/active)
+                    if !this._ActivateListWindow() {
+                        LogDebug("[일지준비] 기존 팝업은 있으나 목록 창 없음 | 목록 창 준비 시작")
+                        ; 리스트 창이 없으면(Case 3) 리스트만 생성
+                        try this.LaunchLogSession(user, "mod", "general", true)
+                    }
+                    ; 기존 일지 페이지 active
+                    Sleep 200
+                    WinActivate("ahk_id " existingLog.BrowserId)
+                    return existingLog
+                }
+
+                ; 일지가 없으면 생성 (Case 1, 2, 5)
+                try {
+                    return this.LaunchLogSession(user, "mod", "general")
+                } catch as e {
+                    LogDebug("[오류] 업무일지 조회 화면 이동 중 오류: " e.Message)
+                    MsgBox("업무일지 조회 화면 이동 중 오류: " e.Message, "오류", "Iconx")
+                    return false
+                }
+            }
+            return true
+        } else {
+            if (taskType == "WorkLog_Create" || taskType == "WorkLog_View")
+                LogDebug("[일지준비] 레거시 UIA 경로 선택 | taskType=" taskType)
+            ; 2. 폴백 (Fallback): webpw가 없는 경우 단순 레거시 런칭 방식으로 직접 제어
+            if (taskType == "SessionCheck") {
+                Run(
+                    "https://mis.humetro.busan.kr/FS/xui/install/x_installChromeSSO.jsp?gv_selSystGubn=LA&gv_userBrowser=Edg"
+                )
+                if WinWait("개별업무통합관리", , 15) {
+                    while !WinExist("개별업무통합관리 - 선로출입현황 조회") {
+                        if (PixelGetColor(450, 470) == 0x0063B5) {
+                            targetId := WinExist("A")
+                            WinClose("ahk_id " targetId)
+
+                            ; login_start
+                            Run("msedge.exe https://btcep.humetro.busan.kr/user/login.face?destination=%2Fportal%2F")
+                            if WinWaitActive(":: 부산교통공사", , 30) {
+                                Sleep 500
+                                LogDebug("[알림] 로그인이 필요합니다 (MsgBox 표시)")
+                                MsgBox("로그인이 필요합니다", "알림", "icon! T5")
+                            }
+                            if !WinWait(":: 부산교통공사 :: ", , 15) {
+                                LogDebug("[오류] 로그인 15초 타임아웃")
+                                MsgBox("로그인 15초 타임아웃", "오류", "Iconx")
+                                return false
+                            }
+                            Run(
+                                "https://mis.humetro.busan.kr/FS/xui/install/x_installChromeSSO.jsp?gv_selSystGubn=LA&gv_userBrowser=Edg"
+                            )
+                            break
+                        }
+                        Sleep 500
+                    }
+                }
+
+                if !WinWait("개별업무통합관리 - 선로출입현황 조회", , 30) {
+                    LogDebug("[오류] 선로출입현황 조회 창 대기 타임아웃")
+                    MsgBox("선로출입현황 조회 창 대기 타임아웃", "오류", "Iconx")
+                    return false
+                }
+                return true
+            }
+            else if (taskType == "WorkLog_Create") {
+                prepareTick := A_TickCount
+                cUIA := this._PrepareSessionOnly(user)
+                if !cUIA {
+                    LogDebug("[일지준비] 생성용 브라우저 준비 실패 | elapsed=" (A_TickCount - prepareTick) "ms")
+                    return false
+                }
+
+                if !this._GoToWorklogList(cUIA) {
+                    LogDebug("[일지준비] 생성용 업무일지 목록 이동 실패 | elapsed=" (A_TickCount - prepareTick) "ms")
+                    return false
+                }
+
+                try {
+                    cUIA.WaitElement({ LocalizedType: "링크", Name: "생성" }, 5000).Invoke()
+                    LogDebug("[일지준비] 생성 버튼 호출 완료 | elapsed=" (A_TickCount - prepareTick) "ms")
+                } catch as e {
+                    LogDebug("[오류] 생성 버튼 대기/호출 실패 | elapsed=" (A_TickCount - prepareTick) "ms | " e.Message)
+                    MsgBox("생성 버튼 대기 타임아웃.`n매크로 동작을 중지합니다.", "오류", "Iconx")
+                    return false
+                }
+
+                popupTick := A_TickCount
+                LogDebug("[일지팝업] 생성 팝업 UIA 탐색 시작 | timeout=5000ms")
+                loop 20 {
+                    if cBrowser := this._FindBrowserByElement(true) {
+                        LogDebug("[일지팝업] 생성 팝업 UIA 탐색 성공 | elapsed=" (A_TickCount - popupTick) "ms | hwnd=" cBrowser.BrowserId)
+                        return cBrowser
+                    }
+                    Sleep 250
+                }
+                LogDebug("[오류] 팝업창(업무일지 생성)을 감지하지 못함 | elapsed=" (A_TickCount - popupTick) "ms")
+                this._LogWorkLogBrowserSnapshot(true, "레거시 생성 팝업 타임아웃")
+                MsgBox("팝업창(업무일지 생성)을 감지하지 못했습니다.", "오류", "Iconx")
+                return false
+            }
+            else if (taskType == "WorkLog_View") {
+                ; 조회 시 기존 팝업창이 열려있는지 1회 확인
+                if cUIA := this._FindBrowserByElement(false) {
+                    LogDebug("[일지준비] 이미 열린 조회 팝업 발견 | hwnd=" cUIA.BrowserId)
+                    return cUIA
+                }
+
+                LogDebug("[일지준비] 열린 조회 팝업 없음 | 목록에서 조회 진행")
+                cUIA := this._PrepareSessionOnly(user)
+                if !cUIA {
+                    LogDebug("[일지준비] 조회용 브라우저 준비 실패")
+                    return false
+                }
+                return this._NavToWorkLogView(cUIA, user)
+            }
+            return true
+        }
     }
 
     ; ==============================================================================
-    ; [내부] _FindBrowserByElement
-    ; 설명: 실행 중인 브라우저를 순회하며 특정 요소가 있는 브라우저 객체를 반환
+    ; [메서드] LaunchLogSession
+    ; 설명: 쿠키 주입 후 Edge 브라우저를 실행하여 일지 작성/조회 창을 엽니다.
     ; ==============================================================================
-    static _FindBrowserByElement(create := false) {
-        targetBrowsers := ["msedge.exe", "chrome.exe", "whale.exe"]
+    static LaunchLogSession(user, mode := "mod", browserMode := "general", skipPopup := false) {
+        launchTick := A_TickCount
+        LogDebug("[일지준비] LaunchLogSession 시작 | mode=" mode " | browserMode=" browserMode " | skipPopup=" skipPopup)
+        ; url 준비
+        targetUrl := ""
+        iljino := ""
 
-        for exe in targetBrowsers {
-            if !ProcessExist(exe)
-                continue
+        if (!skipPopup) {
+            if (mode == "mod") {
+                headless := HeadlessAutomation(true, LogDebug)
+                if (!user.Has("arbpl") || user["arbpl"] == "") {
+                    ;작업장코드가 없으면 inputbox로 직접 입력받음
+                    arbplinput := InputBox("작업장 코드를 불러오는데 실패했습니다`n직접 입력해 주세요`n`n (호포전기분소 예 : 5129)", "작업장코드 입력",
+                        "w250 h150", "5129")
 
-            if !hwndList := WinGetList("ahk_exe " exe)
-                continue
-
-            for hwnd in hwndList {
-                ; [최적화] 타이틀에 "부산교통공사"가 없으면 스킵 (가장 확실한 필터)
-                if !InStr(WinGetTitle(hwnd), "부산교통공사")
-                    continue
-
-                try {
-                    cUIA := UIA_Browser("ahk_id " hwnd)
-                    nowDate := FormatTime(DateAdd(A_Now, create ? 0 : -9, "Hours"), "yyyy-MM-dd")
-                    ; UIA_Browser 인스턴스 생성만으로도 시간이 소요되므로 위 조건으로 최대한 필터링함
-                    if cUIA.FindElement({ AutomationId: "I_GIJUND", Value: nowDate })
-                        return cUIA
+                    if arbplinput.result = "Cancel"
+                        return false
+                    user["arbpl"] := arbplinput.Value
                 }
+                iljino := headless.GetTodayWorkLogNumber(user["id"], user["arbpl"])
+                LogDebug("[일지준비] 오늘자 일지번호 조회 완료 | found=" (iljino != "") " | elapsed=" (A_TickCount - launchTick) "ms")
+
+                if (iljino == "") {
+                    LogDebug("[오류] 오늘자 일지번호 찾기 실패 (작업장코드: " user["arbpl"] ")")
+                    MsgBox("오늘자 일지번호 찾기에 실패했습니다`n재시작 후 다시 시도해 보기 바랍니다`n(작업장코드: " user["arbpl"] ")")
+                    return false
+                }
+
+                targetUrl :=
+                    "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.erp.work_log.WorkLogReg"
+                    . "?I_MODE=MOD&V_ILJINO=" iljino "&V_SABUN=" user["id"]
+            } else if (mode == "reg") {
+                today := FormatTime(DateAdd(A_Now, -9, "Hours"), "yyyy-MM-dd")
+                targetUrl :=
+                    "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.erp.work_log.WorkLogReg"
+                    . "?I_MODE=REG&V_SABUN=" user["id"]
+                    . "&V_ARBPL01=" user["arbpl"]
+                    . "&I_ARWRK=5010"
+                    . "&I_GIJUNDF=" today
+                    . "&I_GIJUNDT=" today
+            } else {
+                return false
             }
         }
+
+        ; 브라우저 인자 조립
+        edgePath := "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+        profile := A_Temp "\edge_cookie_profile" A_TickCount
+        args := ' --remote-debugging-port=9222 --user-data-dir="' profile '"'
+            . ' --no-first-run --no-default-browser-check --disable-default-apps'
+
+        if (browserMode == "app") {
+            args .= ' "data:text/html;charset=utf-8,Loading..."'
+        } else {
+            args .= ' about:blank'
+        }
+
+        ; 9222 포트가 이미 열려있는지 확인
+        isConnected := false
+        try {
+            req := ComObject("WinHttp.WinHttpRequest.5.1")
+            req.Open("GET", "http://127.0.0.1:9222/json/version", false)
+            req.Send()
+            if (req.Status == 200)
+                isConnected := true
+        } catch {
+            isConnected := false
+        }
+        LogDebug("[일지준비] CDP 9222 상태 확인 | connected=" isConnected " | elapsed=" (A_TickCount - launchTick) "ms")
+
+        if (!isConnected) {
+            try {
+                Run(Format('"{1}" {2}', edgePath, args), , "Max", &edgePid)
+                LogDebug("[일지준비] 디버깅 Edge 실행 | pid=" edgePid " | elapsed=" (A_TickCount - launchTick) "ms")
+            } catch as e {
+                LogDebug("[오류] 브라우저 실행 실패: " e.Message)
+                MsgBox("브라우저 실행 실패: " e.Message, "오류", "Iconx")
+                return false
+            }
+        }
+
+        try {
+            ; Chrome 인스턴스 연결
+            chromeInst := Chrome([], , , 9222)
+            LogDebug("[일지준비] CDP 연결 완료 | elapsed=" (A_TickCount - launchTick) "ms")
+
+            if (isConnected && chromeInst.HasProp("PID")) {
+                try WinActivate("ahk_pid " chromeInst.PID)
+            }
+
+            pages := chromeInst.GetPageList()
+            LogDebug("[일지준비] CDP 페이지 목록 획득 | count=" pages.Length " | elapsed=" (A_TickCount - launchTick) "ms")
+            page := ""
+
+            ; 팝업(일지 상세)이 아닌 페이지를 우선 선택 (과거일지 팝업 회피)
+            page := this._FindNonPopupPage(pages)
+
+            if (!page) {
+                ; 비-팝업 페이지가 없으면 새 탭 생성 (기존 일지 팝업 보호)
+                try {
+                    newReq := ComObject("WinHttp.WinHttpRequest.5.1")
+                    newReq.Open("PUT", "http://127.0.0.1:9222/json/new?about:blank", false)
+                    newReq.Send()
+                    if (newReq.Status == 200) {
+                        newTabInfo := JSON.parse(newReq.ResponseText)
+                        if newTabInfo.Has("webSocketDebuggerUrl") {
+                            wsUrl := StrReplace(newTabInfo["webSocketDebuggerUrl"], "localhost", "127.0.0.1")
+                            page := Chrome.Page(wsUrl)
+                        }
+                    }
+                }
+            }
+
+            if (!page) {
+                ; 최종 fallback: 아무 page 타입이라도 선택
+                for p in pages {
+                    if (p.Has("type") && p["type"] == "page") {
+                        if (p.Has("webSocketDebuggerUrl")) {
+                            wsUrl := StrReplace(p["webSocketDebuggerUrl"], "localhost", "127.0.0.1")
+                            page := Chrome.Page(wsUrl)
+                            break
+                        }
+                    }
+                }
+            }
+
+            if (page) {
+                cookieParams := SessionManager.GetCookiesForCDP()
+                LogDebug("[일지준비] 제어 대상 페이지 선택 완료 | cookieCount=" cookieParams.Length " | elapsed=" (A_TickCount - launchTick) "ms")
+                page.Call("Network.enable")
+                page.Call("Network.setCookies", Map("cookies", cookieParams))
+                LogDebug("[일지준비] CDP 쿠키 주입 완료 | elapsed=" (A_TickCount - launchTick) "ms")
+
+                if (browserMode == "app") {
+                    js := Format(
+                        "window.open('{1}', '_blank', 'width=1024,height=760,menubar=no,toolbar=no,location=yes,status=yes,scrollbars=yes,resizable=yes');",
+                        targetUrl)
+                    page.Evaluate(js)
+                    Sleep(500)
+                    page.Call("Page.close")
+
+                } else {
+
+                    ; [Fetch 인터셉터 셋업]
+                    sabun := user.Has("id") ? user["id"] : ""
+                    arbpl := user.Has("arbpl") ? user["arbpl"] : "5129"
+                    dept := user.Has("department") ? user["department"] : "호포전기분소"
+
+                    fakeResp := ":" sabun "::5010:전기사업소:" arbpl ":" dept "::::::::::::::::::::::::::::::::"
+                    fakeB64 := WebAutoLogin._Base64Encode(fakeResp)
+
+                    fetchState := { reqId: "", done: false }
+
+                    interceptCB(msg) {
+                        if (fetchState.done)
+                            return
+                        if (!msg.Has("method") || msg["method"] != "Fetch.requestPaused")
+                            return
+
+                        params := msg["params"]
+                        reqId := params["requestId"]
+                        postData := (params.Has("request") && params["request"].Has("postData")) ? params["request"][
+                            "postData"] : ""
+
+                        if InStr(postData, "BOOKSCH") {
+                            fetchState.reqId := reqId
+                        } else {
+                            try page.Call("Fetch.continueRequest", Map("requestId", reqId), false)
+                        }
+                    }
+
+                    page._callback := interceptCB
+                    page.Call("Fetch.enable", Map("patterns", [Map("urlPattern", "*WorkLogData*", "requestStage",
+                        "Request")]))
+
+                    ; 업무일지 리스트 페이지 이동 (AJAX 발생)
+                    page.Call("Page.navigate", Map("url", this.Worklog_List)) ;헤더 포함
+                    LogDebug("[일지준비] 업무일지 목록 페이지 이동 요청 | elapsed=" (A_TickCount - launchTick) "ms")
+
+                    fetchTick := A_TickCount
+                    loop 150 {
+                        Sleep 100
+                        if (fetchState.reqId == "")
+                            continue
+
+                        try {
+                            page.Call("Fetch.fulfillRequest", Map(
+                                "requestId", fetchState.reqId,
+                                "responseCode", 200,
+                                "responseHeaders", [Map("name", "content-type", "value", "text/plain; charset=utf-8")],
+                                "body", fakeB64
+                            ))
+                        }
+
+                        fetchState.done := true
+                        fetchState.reqId := ""
+                        break
+                    }
+                    LogDebug("[일지준비] WorkLogData 인터셉트 종료 | fulfilled=" fetchState.done " | elapsed=" (A_TickCount - fetchTick) "ms")
+
+                    page.Call("Fetch.disable")
+                    page._callback := 0
+
+                    ; 리스트 페이지 로딩 대기 및 최대화
+                    listHwnd := WinWait("업무일지관리 - 부산교통공사", , 5)
+                    LogDebug("[일지준비] 업무일지 목록 창 대기 종료 | found=" (listHwnd ? true : false) " | elapsed=" (A_TickCount - launchTick) "ms")
+                    try {
+                        listHwnd := WinExist("업무일지관리 - 부산교통공사")
+                        if listHwnd {
+                            WinMaximize("ahk_id " listHwnd)
+                            WinActivate("ahk_id " listHwnd)
+                        }
+                    }
+
+                    ; skipPopup이면 리스트만 준비하고 종료
+                    if (skipPopup) {
+                        LogDebug("[일지준비] 목록 창 준비 완료(skipPopup) | elapsed=" (A_TickCount - launchTick) "ms")
+                        return true
+                    }
+
+                    modeCode := (mode == "mod") ? "MOD" : "REG"
+
+                    js := "(() => { window.__workLogPopupTrace = {state:'waiting', attempts:0, detail:'', error:''}; "
+                        . "let cnt = 0; "
+                        . "let inter = setInterval(() => { "
+                        . "    cnt += 1; window.__workLogPopupTrace.attempts = cnt; "
+                        . "    if (cnt >= 50) clearInterval(inter); "
+                        . "    try {"
+                        . "        const outer = document.querySelector('#ivuFrm_page0ivu1'); "
+                        . "        if (!outer) { window.__workLogPopupTrace.state = 'outer_iframe_missing'; return; } "
+                        . "        const inner = outer.contentDocument?.querySelector(`"iframe[name='isolatedWorkArea']`"); "
+                        . "        if (!inner) { window.__workLogPopupTrace.state = 'inner_iframe_missing'; return; } "
+                        . "        const win = inner.contentWindow; "
+                        . "        window.__workLogPopupTrace.state = 'work_area_found'; "
+                        . "        window.__workLogPopupTrace.detail = 'jquery=' + !!win.$ + ',fn_detail_open=' + !!win.fn_detail_open + ',WorkLogForm=' + !!win.document?.WorkLogForm; "
+                        . "        if (win.$ && win.fn_detail_open && win.document?.WorkLogForm) {"
+                        . "            clearInterval(inter); "
+
+                    if (mode == "mod" && iljino != "")
+                        js .= "            win.$('#V_ILJINO').val('" iljino "'); "
+
+                    js .= "            win.$('#I_MODE').val('" modeCode "'); "
+                        .
+                        "            win.fn_detail_open('WorkLogForm', 'reg', 'kr.busan.humetro.cbo.erp.work_log.WorkLogReg', 'width=1024,height=760,scrollbars=yes,resizable=yes,status=yes'); "
+                        . "            window.__workLogPopupTrace.state = 'popup_invoked'; "
+                        . "        } "
+                        . "        else { window.__workLogPopupTrace.state = 'popup_function_not_ready'; } "
+                        . "    } catch (e) { window.__workLogPopupTrace.state = 'javascript_error'; window.__workLogPopupTrace.error = String(e?.message || e); }"
+                        . "}, 100); })(); "
+
+                    page.Evaluate(js)
+                    LogDebug("[일지팝업] JavaScript 호출 감시 시작 | mode=" mode " | timeout=5000ms | elapsed=" (A_TickCount - launchTick) "ms")
+                }
+            } else {
+                LogDebug("[오류] 일지준비 제어 대상 CDP 페이지를 찾지 못함 | elapsed=" (A_TickCount - launchTick) "ms")
+            }
+        } catch as e {
+            detail := e.Extra != "" ? " | " StrReplace(StrReplace(e.Extra, "`r", " "), "`n", " ") : ""
+            LogDebug("[오류] 브라우저 제어(쿠키/이동) 오류: Line" e.Line " " e.Message detail)
+            MsgBox("브라우저 제어(쿠키/이동) 오류: Line" e.Line "`n" e.Message, "오류", "Iconx")
+            return false
+        }
+
+        ; 열린 팝업창(일지 상세창)의 UIA 객체를 획득하여 반환
+
+        ; JS(fn_detail_open) 실행 후 업무일지 팝업의 UIA 객체를 최대 5초간 탐색
+        popupTick := A_TickCount
+        loop 50 {
+            Sleep 100
+            if cUIA := this._FindBrowserByElement(false) {
+                LogDebug("[일지팝업] 팝업 UIA 연결 성공 | mode=" mode " | elapsed=" (A_TickCount - popupTick) "ms | total=" (A_TickCount - launchTick) "ms | hwnd=" cUIA.BrowserId)
+                return cUIA
+            }
+        }
+        jsTrace := "조회 실패"
+        try jsTrace := page.Evaluate("JSON.stringify(window.__workLogPopupTrace || {state:'trace_missing'})")["value"]
+        LogDebug("[일지팝업] JavaScript 최종 상태 | " jsTrace)
+        this._LogWorkLogBrowserSnapshot(false, "CDP 팝업 타임아웃")
+        LogDebug("[오류] 일지 상세창(팝업) 호출 시간 초과 - cUIA 연결 실패 | timeout=5000ms | total=" (A_TickCount - launchTick) "ms")
+        MsgBox("일지 상세창(팝업) 호출 시간 초과`ncUIA 연결 실패", "알림", "Iconx")
         return false
     }
 
     ; ==============================================================================
-    ; [내부] _FindBrowserByTab(
-    ; 설명: 실행 중인 브라우저를 순회하며 탭 이름에 키워드(배열)가 포함된 브라우저 객체를 반환
+    ; [메서드] LaunchXPlatformSession
+    ; 설명: XPLATFORM 로컬 런처 (7936 포트)와 통신하여 쿠키를 주입하고 XPLATFORM을 구동합니다.
     ; ==============================================================================
-    static _FindBrowserByTab(keywordArr) {
-        targetBrowsers := ["msedge.exe", "chrome.exe", "whale.exe"]
+    static LaunchXPlatformSession(user) {
+        http := ComObject("WinHttp.WinHttpRequest.5.1")
+        http.Option[3] := 0  ; EnableCookieExchange = False
+        http.Option[4] := 13056 ; IgnoreCertErrors
 
+        try {
+            launcherUrl := "https://127.0.0.1:7936/launcher/xplatform/" A_TickCount
+
+            ; 1. Create
+            http.Open("POST", launcherUrl, false)
+            http.SetRequestHeader("Content-Type", "text/plain;charset=UTF-8")
+            http.Send('{"platform":"xplatform","action":"create"}')
+
+            createResp := JSON.parse(http.ResponseText)
+            if (createResp.Has("result") && createResp["result"] != "success")
+                throw Error("런처 세션 생성 실패")
+
+            launchId := createResp["id"]
+
+            ; 2. setproperty
+            setPropVal := Map(
+                "key", "eGovXplatform",
+                "xadl", "https://mis.humetro.busan.kr:443/FS/xui/XUI.xadl",
+                "componentpath", "%USERAPPLOCAL%\XPLATFORM\921\component\",
+                "cachedir", "%CACHE%",
+                "splashimage", "https://mis.humetro.busan.kr:443/FS/xui//install/img/loading_img.gif",
+                "loadingimage", "https://mis.humetro.busan.kr:443/FS/xui//install/img/loading_img.gif",
+                "commthreadwaittime", 1,
+                "version", "9.2.1",
+                "commthreadcount", 3,
+                "errorfile", "xplatform.xml",
+                "globalvalue", "gv_selSystGubn=LA,gv_userBrowser=Edg,,gv_ssoUserId=" user["id"] ",gv_svcUrl=https://mis.humetro.busan.kr:443/FS/",
+                "onlyone", false,
+                "showiniterror", false,
+                "usewininet", true,
+                "enginesetupkey", "{AA890DB4-7357-4237-82BB-D0B931AAB420}",
+                "splashmessage", "new lanucher test..."
+            )
+            setPropPayload := JSON.stringify(Map("platform", "xplatform", "action", "setproperty", "id", launchId,
+                "value", setPropVal))
+
+            http.Open("POST", launcherUrl, false)
+            http.Send(setPropPayload)
+
+            ; 3. addWebInfo (ep 도메인 쿠키)
+            epCookieStr := SessionManager.GetCookieHeaderForUrl(
+                "http://ep.humetro.busan.kr/irj/portal")
+            if (epCookieStr == "") {
+                LogDebug("[오류] XPLATFORM ep 쿠키 정보 없음")
+                MsgBox("XPLATFORM 구동에 필요한 ep 쿠키 정보를 찾을 수 없습니다.", "에러", "Iconx")
+                return false
+            }
+
+            addWebInfoPayload := JSON.stringify(Map(
+                "platform", "xplatform",
+                "action", "method",
+                "id", launchId,
+                "value", Map("addWebInfo", Map("param", [epCookieStr]))
+            ))
+
+            http.Open("POST", launcherUrl, false)
+            http.Send(addWebInfoPayload)
+
+            ; 4. launch
+            launchPayload := JSON.stringify(Map(
+                "platform", "xplatform",
+                "action", "method",
+                "id", launchId,
+                "value", Map("launch", "ok")
+            ))
+
+            http.Open("POST", launcherUrl, false)
+            http.Send(launchPayload)
+
+            return true
+
+        } catch as err {
+            LogDebug("[오류] XPLATFORM 실행 중 오류: " err.Message)
+            MsgBox("XPLATFORM 실행 중 오류 발생 (런처 데몬이 종료되었거나 포트가 다릅니다): " err.Message, "오류", "Iconx")
+            return false
+        }
+    }
+
+    ; ==============================================================================
+    ; [내부] _FindBrowserByElement (단순 레거시 복원)
+    ; 설명: 현재 띄워진 브라우저 창들 중 "부산교통공사" 타이틀이면서 당일자 일지가 열린 탭을 탐색
+    ; ==============================================================================
+    static _FindBrowserByElement(create := false) {
+        targetBrowsers := ["msedge.exe", "chrome.exe", "whale.exe"]
         for exe in targetBrowsers {
             if !ProcessExist(exe)
                 continue
-
-            try {
-                hwndList := WinGetList("ahk_exe " exe)
-            } catch {
+            try hwndList := WinGetList("ahk_exe " exe)
+            catch
                 continue
-            }
 
             for hwnd in hwndList {
-                cUIA := UIA_Browser("ahk_id " hwnd)
-                tabs := cUIA.GetAllTabNames()
-
-                for keyword in keywordArr {
-                    for tabItem in tabs {
-                        if InStr(tabItem, keyword) {
-                            try {
-                                cUIA.SelectTab(tabItem) ; 해당 탭 선택
-                            }
-                            return cUIA
-                        }
+                if !InStr(WinGetTitle("ahk_id " hwnd), "부산교통공사 - ")
+                    continue
+                try {
+                    cUIA := UIA_Browser("ahk_id " hwnd)
+                    nowDate := FormatTime(DateAdd(A_Now, create ? 0 : -9, "Hours"), "yyyy-MM-dd")
+                    if cUIA.FindElement({ AutomationId: "I_GIJUND", Value: nowDate }) {
+                        WinRestore("ahk_id " hwnd)
+                        WinActivate("ahk_id " hwnd)
+                        return cUIA
                     }
                 }
             }
@@ -428,65 +567,178 @@ class WebAutoLogin {
         return false
     }
 
+    ; 업무일지 팝업 탐색 실패 시 브라우저/UIA 상태를 한 번에 기록합니다.
+    static _LogWorkLogBrowserSnapshot(create := false, reason := "") {
+        expectedDate := FormatTime(DateAdd(A_Now, create ? 0 : -9, "Hours"), "yyyy-MM-dd")
+        targetBrowsers := ["msedge.exe", "chrome.exe", "whale.exe"]
+        browserCount := 0
+        LogDebug("[일지팝업진단] 스냅샷 시작 | reason=" reason " | create=" create " | expectedDate=" expectedDate)
+
+        for exe in targetBrowsers {
+            if !ProcessExist(exe) {
+                LogDebug("[일지팝업진단] 프로세스 없음 | exe=" exe)
+                continue
+            }
+
+            try hwndList := WinGetList("ahk_exe " exe)
+            catch as e {
+                LogDebug("[일지팝업진단] 창 목록 조회 실패 | exe=" exe " | " e.Message)
+                continue
+            }
+
+            for hwnd in hwndList {
+                browserCount += 1
+                title := ""
+                try title := WinGetTitle("ahk_id " hwnd)
+                titleMatched := InStr(title, "부산교통공사 - ") ? true : false
+                LogDebug("[일지팝업진단] 브라우저 창 | exe=" exe " | hwnd=" hwnd " | titleMatched=" titleMatched " | title=" title)
+
+                if !titleMatched
+                    continue
+
+                try {
+                    cUIA := UIA_Browser("ahk_id " hwnd)
+                    dateElement := cUIA.FindElement({ AutomationId: "I_GIJUND" })
+                    if !dateElement {
+                        LogDebug("[일지팝업진단] UIA 연결 성공, I_GIJUND 없음 | hwnd=" hwnd)
+                        continue
+                    }
+
+                    actualDate := "<읽기 실패>"
+                    try actualDate := dateElement.Value
+                    catch as e
+                        LogDebug("[일지팝업진단] I_GIJUND 값 읽기 실패 | hwnd=" hwnd " | " e.Message)
+                    LogDebug("[일지팝업진단] UIA 날짜 확인 | hwnd=" hwnd " | actualDate=" actualDate " | expectedDate=" expectedDate " | matched=" (actualDate == expectedDate))
+                } catch as e {
+                    LogDebug("[일지팝업진단] UIA 연결/탐색 실패 | hwnd=" hwnd " | " e.Message)
+                }
+            }
+        }
+
+        LogDebug("[일지팝업진단] 스냅샷 종료 | browserWindowCount=" browserCount)
+    }
+
     ; ==============================================================================
-    ; [내부] _PrepareSessionOnly (Pattern 선로출입관리)
+    ; [내부] _ActivateListWindow
+    ; 설명: "업무일지관리" 타이틀 윈도우를 찾아 최대화 및 활성화
+    ; ==============================================================================
+    static _ActivateListWindow() {
+        targetBrowsers := ["msedge.exe", "chrome.exe", "whale.exe"]
+        for exe in targetBrowsers {
+            if !ProcessExist(exe)
+                continue
+            try hwndList := WinGetList("ahk_exe " exe)
+            catch
+                continue
+            for hwnd in hwndList {
+                if InStr(WinGetTitle("ahk_id " hwnd), "업무일지관리 - 부산교통공사") {
+                    WinMaximize("ahk_id " hwnd)
+                    WinActivate("ahk_id " hwnd)
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    ; ==============================================================================
+    ; [내부] _FindNonPopupPage
+    ; 설명: CDP 페이지 목록에서 팝업(일지 상세)이 아닌 페이지를 우선 선택
+    ;       리스트 페이지 > 일반 탭 순으로 우선순위
+    ; ==============================================================================
+    static _FindNonPopupPage(pages) {
+        ; 1차: 리스트 페이지(workset.03) 우선 탐색
+        for p in pages {
+            if (p.Has("type") && p["type"] == "page" && p.Has("url")) {
+                if (InStr(p["url"], "workset.03") || InStr(p["url"], "WorkLogList")) {
+                    if (p.Has("webSocketDebuggerUrl")) {
+                        wsUrl := StrReplace(p["webSocketDebuggerUrl"], "localhost", "127.0.0.1")
+                        return Chrome.Page(wsUrl)
+                    }
+                }
+            }
+        }
+        ; 2차: 팝업(WorkLogReg = 일지 상세)이 아닌 일반 탭 선택
+        for p in pages {
+            if (p.Has("type") && p["type"] == "page" && p.Has("url")) {
+                if InStr(p["url"], "WorkLogReg")
+                    continue
+                if (p.Has("webSocketDebuggerUrl")) {
+                    wsUrl := StrReplace(p["webSocketDebuggerUrl"], "localhost", "127.0.0.1")
+                    return Chrome.Page(wsUrl)
+                }
+            }
+        }
+        return false
+    }
+
+    ; ==============================================================================
+    ; [내부] _PrepareSessionOnly
     ; ==============================================================================
     static _PrepareSessionOnly(user) {
-
         exeName := this.GetBrowserExe()
+        Run(exeName " " this.PortalURL)
+        WinMaximize hwnd := WinWaitActive("ahk_exe " exeName, , 5)
 
-        ; 1. 무조건 새 창으로 포털 접속 (기존 작업 방해 방지)
-        ; --new-window: 새 창 강제
-        ; --start-maximized를 빼고 실행해야 이동이 수월함
-        Run(exeName " --new-window " this.PortalURL) ;PortalURL
-        WinWaitActive("ahk_exe " exeName, , 5)
-        WinRestore(WinExist())
-
-        ; 2. UIA 연결
         try {
-            ; WinWait로 찾은 마지막 창(Last Found Window)을 대상으로 UIA 초기화
-            cUIA := UIA_Browser("ahk_id " WinExist())
+            cUIA := UIA_Browser(hwnd)
         } catch as e {
-            ; 연결 실패 시 로그 남기거나 false 반환
-            MsgBox "cUIA 연결 실패"  ;디버깅용
+            LogDebug("[오류] cUIA 연결 실패 (_PrepareSessionOnly)")
+            MsgBox("cUIA 연결 실패", "오류", "Iconx")
             return false
         }
 
-        ; 5. 로그인 점검
-        if !this.IsLoggedIn(cUIA)
-            return this.Login(user["id"], user["webPW"], user["pw2"], cUIA)
-
+        ; IsLoggedIn 5초 대기 (50회 x 100ms)
+        if !this.IsLoggedIn(cUIA, true, 50) {
+            return this.Login(user["id"], user.Has("webPW") ? user["webPW"] : "", user.Has("pw2") ? user["pw2"] : "",
+            cUIA)
+        }
         return cUIA
     }
 
     ; ==============================================================================
-    ; [내부] _NavToWorkLogView (Pattern 일지조회)
+    ; [내부] _NavToWorkLogView
     ; ==============================================================================
     static _NavToWorkLogView(cUIA, user) {
+        navTick := A_TickCount
+        LogDebug("[일지준비] 레거시 조회 화면 이동 시작")
         try {
-            ; 1. 메뉴 이동
-            this._GoToWorklogList(cUIA)
-
-            ; 2. 일지 검색 및 클릭
+            if !this._GoToWorklogList(cUIA) {
+                LogDebug("[일지준비] 레거시 조회 목록 이동 실패 | elapsed=" (A_TickCount - navTick) "ms")
+                return false
+            }
             targetDate := FormatTime(DateAdd(A_Now, -9, "Hours"), "yyyyMMdd")
             dept := user.Has("department") ? user["department"] : "호포전기분소"
             targetName := targetDate " " dept " 업무일지"
 
             try {
-                ; 항목 클릭
-                cUIA.WaitElement({ LocalizedType: "텍스트", Name: targetName }, 7000).Click("Left")
+                ; 페이지 진입 직후 5초 대기
+                cUIA.WaitElement({ LocalizedType: "텍스트", Name: targetName }, 5000).Click("Left")
                 Sleep 250
-                ; 변경/조회 클릭
-                cUIA.WaitElement({ LocalizedType: "링크", Name: "변경/조회" }, 3000).Invoke()
-                Sleep 500
-            } catch {
-                MsgBox("오늘자 업무일지(" targetName ")를 찾을 수 없습니다.", "알림", "Icon!")
+                ; 기본 2초 대기
+                cUIA.WaitElement({ LocalizedType: "링크", Name: "변경/조회" }, 2000).Invoke()
+                LogDebug("[일지준비] 변경/조회 버튼 호출 완료 | target=" targetName " | elapsed=" (A_TickCount - navTick) "ms")
+            } catch as e {
+                LogDebug("[오류] 오늘자 업무일지 요소 대기/호출 실패: " targetName " | elapsed=" (A_TickCount - navTick) "ms | " e.Message)
+                MsgBox("오늘자 업무일지(" targetName ") 요소 대기 타임아웃.`n매크로 동작을 중단합니다.", "오류", "Icon!")
                 return false
             }
 
-            return this._FindBrowserByElement()
-
+            popupTick := A_TickCount
+            LogDebug("[일지팝업] 조회 팝업 UIA 탐색 시작 | timeout=5000ms")
+            loop 20 {
+                if cBrowser := this._FindBrowserByElement(false) {
+                    LogDebug("[일지팝업] 조회 팝업 UIA 탐색 성공 | elapsed=" (A_TickCount - popupTick) "ms | hwnd=" cBrowser.BrowserId)
+                    return cBrowser
+                }
+                Sleep 250
+            }
+            LogDebug("[오류] 업무일지 조회 팝업창을 찾을 수 없음 | elapsed=" (A_TickCount - popupTick) "ms")
+            this._LogWorkLogBrowserSnapshot(false, "레거시 조회 팝업 타임아웃")
+            MsgBox("업무일지 조회 팝업창을 찾을 수 없습니다.", "오류", "Iconx")
+            return false
         } catch as e {
+            LogDebug("[오류] 업무일지 조회 화면 이동 중 오류: " e.Message)
             MsgBox("업무일지 조회 화면 이동 중 오류: " e.Message, "오류", "Iconx")
             return false
         }
@@ -496,145 +748,313 @@ class WebAutoLogin {
     ; [헬퍼] 업무일지 리스트 메뉴 이동
     ; ==============================================================================
     static _GoToWorklogList(cUIA) {
-
-        ; 1. 현재 페이지 확인 (ERP포털이나 통합포털이 아니면 이동 필요)
-        currentTitle := WinGetTitle(cUIA.BrowserId)
+        currentTitle := WinGetTitle("ahk_id " cUIA.BrowserId)
+        isList := InStr(currentTitle, "업무일지관리 - 부산교통공사")
         isERP := InStr(currentTitle, "ERP포털시스템 - 부산교통공사")
         isIntegrated := InStr(currentTitle, ":: 부산교통공사 ::")
 
+        if (isList)
+            return true
+
         if (!isERP) {
             if (isIntegrated) {
-                ; 통합포털이면 ERP 버튼 클릭 시도
                 try {
-                    cUIA.WaitElement({ Type: "Link", Name: "ERP" }, 3000).Invoke()
+                    cUIA.WaitElement({ Type: "Link", Name: "ERP" }, 2000).Invoke()
                 } catch {
-                    ; 버튼 없으면 그냥 URL 이동
                     cUIA.navigate(this.ERP_PortalURL, , 10000)
                 }
             } else {
-                ; 그 외 페이지면 URL 직접 이동
                 cUIA.navigate(this.ERP_PortalURL, , 10000)
             }
 
-            ; 2. [핵심] 이동 후 상태 검증 (Smart Wait)
-            ; 성공 신호(ERP 메뉴) 또는 실패 신호(로그인창 - userId) 중 먼저 뜨는 것을 10초간 대기
             try {
                 foundEl := cUIA.WaitElement([{ AutomationId: "userId" }, { Name: "업무일지 업무일지" }], 10000)
-
-                ; 3. 로그인 화면으로 튕겼는지 확인
                 if (foundEl.AutomationId == "userId") {
-                    ; 세션 만료됨! 재로그인 시도
                     user := ConfigManager.CurrentUser
-                    if this.Login(user["id"], user["webPW"], user["pw2"], cUIA) {
-                        ; 재로그인 성공 -> 다시 이동
+                    if this.Login(user["id"], user.Has("webPW") ? user["webPW"] : "", user.Has("pw2") ? user["pw2"] :
+                        "", cUIA) {
                         cUIA.navigate(this.ERP_PortalURL, , 10000)
-                        ; 이번엔 무조건 ERP 메뉴 대기 (또 실패하면 에러처리)
                         cUIA.WaitElement({ Name: "업무일지 업무일지" }, 10000)
                     } else {
                         throw Error("세션 만료 후 재로그인 실패")
                     }
                 }
             } catch as e {
-                MsgBox("페이지 이동 중 문제 발생: " e.Message)
+                LogDebug("[오류] 페이지 이동 중 타임아웃: " e.Message)
+                MsgBox("페이지 이동 중 타임아웃 오류 발생: " e.Message, "오류", "Iconx")
                 return false
             }
         }
 
-        ; 업무일지 아이콘/버튼이 나오면 클릭 => 업무일지 리스트 페이지로 이동
         try {
             cUIA.WaitElement({ Name: "업무일지 업무일지" }, 10000).Invoke()
         } catch {
-            ; 이미 리스트 등 다른 화면일 수 있으므로 패스하거나 재시도 등 고민
-            ; 여기서는 일단 진행
+            LogDebug("[오류] 업무일지 메뉴 타임아웃")
+            MsgBox("업무일지 메뉴 타임아웃.`n매크로 동작을 중단합니다.", "오류", "Iconx")
+            return false
         }
 
         return true
     }
 
+    ; ============================================================
+    ; 정적 헬퍼 메서드 추가
+    ; ============================================================
+
+    static _Base64Encode(str) {
+        bytes := Buffer(StrPut(str, "UTF-8") - 1)
+        StrPut(str, bytes, "UTF-8")
+        size := 0
+        DllCall("Crypt32\CryptBinaryToString", "Ptr", bytes, "UInt", bytes.Size, "UInt", 0x40000001, "Ptr", 0, "UInt*", &
+            size)
+        buf := Buffer(size * 2)
+        DllCall("Crypt32\CryptBinaryToString", "Ptr", bytes, "UInt", bytes.Size, "UInt", 0x40000001, "Ptr", buf,
+            "UInt*", &size)
+        return StrReplace(StrReplace(StrGet(buf, "UTF-16"), "`r", ""), "`n", "")
+    }
+
+    static _BuildAlertPatch() {
+        js := "
+        (
+        (function() {
+            ; ── 진단용 마커: 이 스크립트가 실행된 window에 표시
+            window.__alertPatched = true;
+            console.log('[PATCH] addScriptToEvaluateOnNewDocument 적용됨:', location.href);
+
+            ; ── alert 오버라이드
+            var _orig = window.alert;
+            window.alert = function(msg) {
+                if (typeof msg === 'string' && (
+                    msg.includes('플랜트')   ||
+                    msg.includes('작업장')   ||
+                    msg.includes('일치')     ||
+                    msg.includes('필수항목') ||
+                    msg.includes('부서') )) {
+                    console.warn('[PATCH] alert 억제:', location.href, '|', msg);
+                    return;
+                }
+                return _orig.apply(this, arguments);
+            };
+        })();
+        )"
+
+        return js
+    }
+
+    static _BuildPatchScript(user) {
+        patchJS := "
+        (
+        (function() {
+
+            // 원본 alert 함수 저장
+            var _origAlert = window.alert;
+
+            // alert 함수 가로채기
+            window.alert = function(msg) {
+                // 특정 메시지 포함된 alert은 차단
+                if (typeof msg === 'string' && (
+                    msg.includes('플랜트') ||
+                    msg.includes('작업장') ||
+                    msg.includes('일치') ||
+                    msg.includes('부서'))) {
+                    console.warn('[패치] alert 차단:', msg);
+                    return;
+                }
+                // 다른 alert은 원본 alert으로 처리
+                return _origAlert.apply(this, arguments);
+            };
+
+            // #ivuFrm_page0ivu1 안의 #isolatedWorkArea 내에서도 alert 차단
+            var iframe = document.querySelector('#ivuFrm_page0ivu1');
+            if (iframe) {
+                var iframeWindow = iframe.contentWindow;
+                // iframe 내에서도 alert 가로채기
+                var _iframeAlert = iframeWindow.alert;
+                iframeWindow.alert = function(msg) {
+                    if (typeof msg === 'string' && (
+                        msg.includes('플랜트') ||
+                        msg.includes('작업장') ||
+                        msg.includes('일치') ||
+                        msg.includes('부서'))) {
+                        console.warn('[패치] iframe 내 alert 차단:', msg);
+                        return;
+                    }
+                    return _iframeAlert.apply(this, arguments);
+                };
+            }
+
+            // #isolatedWorkArea 내의 alert 차단
+            var isolatedWorkArea = document.querySelector('#isolatedWorkArea');
+            if (isolatedWorkArea) {
+                var _isolatedAlert = isolatedWorkArea.contentWindow.alert;
+                isolatedWorkArea.contentWindow.alert = function(msg) {
+                    if (typeof msg === 'string' && (
+                        msg.includes('플랜트') ||
+                        msg.includes('작업장') ||
+                        msg.includes('일치') ||
+                        msg.includes('부서'))) {
+                        console.warn('[패치] isolatedWorkArea 내 alert 차단:', msg);
+                        return;
+                    }
+                    return _isolatedAlert.apply(this, arguments);
+                };
+            }
+
+        })();
+        )"
+
+        return patchJS
+    }
+
+    static _BuildPatchScript__(user) {
+        ; AHK의 user 객체 값을 JS에 직접 삽입
+        ; → SESS_* 서버 렌더링에 의존하지 않아도 됨
+        arbpl := user["arbpl"]   ; 예: "5129"
+        pernr := user["id"]      ; 예: "116713"
+
+        patchJS := "
+        (
+        (function() {
+
+            /* ── ① alert 억제 ─────────────────────────────────────
+               fn_Sch2() 내부의 '플랜트가 작업장 플랜트와 일치하지 않습니다'
+               alert이 실행 흐름을 막는 것을 방지                          */
+            var _origAlert = window.alert;
+            window.alert = function(msg) {
+                if (typeof msg === 'string' && (
+                    msg.includes('플랜트') ||
+                    msg.includes('작업장') ||
+                    msg.includes('일치') ||
+                    msg.includes('부서') )) {
+                    console.warn('[패치] alert 억제:', msg);
+                    return;   // 무시
+                }
+                return _origAlert.apply(this, arguments);
+            };
+
+            /* ── ② BOOKSCH XHR 인터셉트 ───────────────────────────
+               즐겨찾기 없는 응답이 돌아오면:
+                 a) jQuery success 콜백(else 분기 + fn_Sch2)이 먼저 실행됨
+                 b) alert은 ①에서 억제됨
+                 c) loadend 후 200ms 뒤 값을 교정하고 fn_Sch2() 재실행   */
+            var _arbpl  = '__ARBPL__';    ; AHK가 치환
+            var _pernr  = '__PERNR__';    ; AHK가 치환
+
+            var _origSend = XMLHttpRequest.prototype.send;
+            XMLHttpRequest.prototype.send = function(body) {
+                if (body && typeof body === 'string' && body.includes('BOOKSCH')) {
+                    var xhr = this;
+                    xhr.addEventListener('loadend', function() {
+                        try {
+                            var resp = xhr.responseText || '';
+
+                            /* 첫 글자가 ':'가 아니면 즐겨찾기 없는 실패 응답 */
+                            if (resp.charAt(0) !== ':') {
+
+                                setTimeout(function() {
+
+                                    /* ARBPL이 비어있거나 디폴트(1081)로 세팅된 경우만 교정 */
+                                    var curArbpl = (typeof $ !== 'undefined')
+                                                   ? $('#I_ARBPL').val() : '';
+                                    if (curArbpl !== '' && curArbpl !== '1081') return;
+
+                                    /* SESS_* (서버 렌더링) 또는 AHK 주입값 우선 사용 */
+                                    var targetWerks    = (typeof SESS_WERKS    !== 'undefined' && SESS_WERKS)
+                                                         ? SESS_WERKS    : '5010';
+                                    var targetArbpl    = (typeof SESS_ARBPL    !== 'undefined' && SESS_ARBPL)
+                                                         ? SESS_ARBPL    : _arbpl;
+                                    var targetArbplTxt = (typeof SESS_ARBPLTEXT !== 'undefined' && SESS_ARBPLTEXT)
+                                                         ? SESS_ARBPLTEXT : '';
+
+                                    if (!targetArbpl) return;  ; 값이 없으면 포기
+
+                                    /* 필드 교정 */
+                                    $('#I_ARWRK').val(targetWerks);
+                                    $('#I_WERKS').val(targetWerks);
+                                    $('#I_ARBPL').val(targetArbpl);
+                                    $('#I_ARBPLTEXT').val(targetArbplTxt);
+
+                                    console.log('[패치] 작업장 교정 완료:', targetArbpl, targetArbplTxt);
+
+                                    /* fn_Sch2() 재실행 → 이번엔 ARWRK==WERKS이므로 정상 검색 */
+                                    if (typeof fn_Sch2 === 'function') fn_Sch2();
+
+                                }, 200);
+                            }
+                        } catch(e) {
+                            console.warn('[패치] BOOKSCH 처리 오류:', e);
+                        }
+                    });
+                }
+                return _origSend.apply(this, arguments);
+            };
+
+        })();
+        )"
+        ; AHK 변수 치환
+        patchJS := StrReplace(patchJS, "__ARBPL__", arbpl)
+        patchJS := StrReplace(patchJS, "__PERNR__", pernr)
+        return patchJS
+    }
+
     ; ==============================================================================
-    ; [헬퍼] '부산교통공사'탭이 열린 브라우저 (기본:엣지)
+    ; [헬퍼] 브라우저 이름 탐색
     ; ==============================================================================
     static GetBrowserExe() {
-
-        ; 검사할 브라우저 목록
         targetBrowsers := ["msedge.exe", "chrome.exe", "whale.exe"]
-
         for exe in targetBrowsers {
-            ; 1. 해당 브라우저 프로세스가 없으면 스킵
             if !ProcessExist(exe)
                 continue
-
-            ; 2. 해당 브라우저의 모든 창 ID(HWND) 가져오기
             try {
                 hwndList := WinGetList("ahk_exe " exe)
             } catch {
                 continue
             }
-
-            ; 3. 각 창을 순회하며 탭 검사
             for hwnd in hwndList {
-                ; [최적화]
                 if !InStr(WinGetTitle(hwnd), "부산교통공사")
                     continue
-
                 try {
-                    ; 최소화된 창은 UIA가 요소를 못 읽을 수 있어서 건너뛰거나, WinRestore를 해야 함.
-                    ; (일단은 '조용한 탐색'을 위해 복원 없이 시도 에러나면 넘어감)
-
                     cUIA := UIA_Browser("ahk_id " hwnd)
                     tabs := cUIA.GetAllTabs()
-
                     for tabItem in tabs {
-                        ; 탭 이름에 검색어가 포함되어 있는지 확인
-                        if InStr(tabItem.Name, "부산교통공사") {
-                            return exe ; 발견 즉시 exe 이름 반환 (함수 종료)
-                        }
+                        if InStr(tabItem.Name, "부산교통공사")
+                            return exe
                     }
                 } catch {
-                    ; UIA 연결 실패, 권한 문제, 또는 요소 찾기 실패 시 다음 창으로 넘어감
                     continue
                 }
             }
         }
-
-        return "msedge.exe" ; 모든 브라우저를 다 뒤져도 없으면 엣지로 반환
+        return "msedge.exe"
     }
 
     ; ==============================================================================
     ; [메서드] IsLoggedIn
-    ; 설명: Positive Validation 방식의 로그인 점검
     ; ==============================================================================
-    static IsLoggedIn(cUIA := "") {
+    static IsLoggedIn(cUIA := "", silent := false, loops := 30) {
         try {
             if !cUIA
-                cUIA := UIA_Browser("A") ; 현재 활성 브라우저
-
-            loop 70 {
-                ; 1. 로그아웃 버튼이 있으면 로그인된 상태 (Positive)
-                try
+                cUIA := UIA_Browser("A")
+            loop loops {
+                try {
                     if cUIA.FindElement({ Name: "로그아웃" })
                         return cUIA
-
-                ; 2. 업무일지 메뉴 버튼이 있어도 로그인된 상태
-                try
+                }
+                try {
                     if cUIA.FindElement({ Name: "업무일지 업무일지" })
                         return cUIA
-
-                ; 3. 로그인 입력창(userId)이 있으면 로그아웃 상태 (Negative)
-                try
+                }
+                try {
                     if cUIA.FindElement({ AutomationId: "userId" })
                         return false
-
-                Sleep 100   ;30 * 100 = 3초간 확인
+                }
+                Sleep 100
             }
-
-            ; 4. 둘 다 없으면? 로딩중이거나 엉뚱한 페이지.
-            ; 일단 False 반환하여 로그인 시도 유도하거나 예외 처리
-            MsgBox "로그인 상태 확인 불가"
+            if !silent
+                LogDebug("[오류] 로그인 상태 확인 실패 또는 알 수 없는 상태")
+                MsgBox("로그인 상태 확인을 지연(로딩 중)하거나 알 수 없는 상태입니다.", "알림", "Iconi")
             return false
-
         } catch {
-            MsgBox "알수 없는 에러"
             return false
         }
     }
@@ -643,47 +1063,49 @@ class WebAutoLogin {
     ; [메서드] Login
     ; ==============================================================================
     static Login(id, pw, pw2, cUIA := "") {
+        if !cUIA
+            cUIA := UIA_Browser("A")
+
         if (id == "" || pw == "") {
-            MsgBox("로그인 정보(사번, 비번)가 없습니다.", "오류")
+            LogDebug("[알림] 통합pw 미설정 - 수동 로그인 대기")
+            MsgBox("통합pw가 지정되어 있지 않습니다. 브라우저에서 직접 로그인해주세요.`n확인을 누르면 15초간 로그인을 대기합니다.", "로그인 대기", "Iconi")
+            loop 15 {
+                Sleep 1000
+                if (this.IsLoggedIn(cUIA, true, 10))
+                    return cUIA
+            }
+            LogDebug("[오류] 로그인 대기 시간(15초) 초과")
+            MsgBox("로그인 대기 시간(15초)이 초과되었습니다.`n위 기능 사용이 제한되며 매크로 작업을 종료합니다.", "시간 초과", "Iconx")
             return false
         }
 
         try {
-            if !cUIA
-                cUIA := UIA_Browser("A")
-
-            ; 아이디 입력
             cUIA.WaitElement({ AutomationId: "userId" }, 2000).Value := id
-
-            ; 비밀번호 입력
             cUIA.FindElement({ AutomationId: "password" }).Value := pw
-
-            ; 로그인 버튼 클릭 (ClassName: btn_login)
             cUIA.FindElement({ ClassName: "btn_login" }).Invoke()
 
-            ; 2차 인증 대기 (있을 경우)
             try {
-                ; 인증번호 입력창 대기 (짧게)
                 cUIA.WaitElement({ AutomationId: "certi_num" }, 2000).Value := pw2
-                cUIA.FindElement({ ClassName: "btn_blue" }).Invoke() ; 확인 버튼
+                cUIA.FindElement({ ClassName: "btn_blue" }).Invoke()
             } catch as e {
+                LogDebug("[오류] 2차인증 실패: " e.Message)
                 MsgBox("2차인증 실패`n" e.Message, "오류")
                 return false
             }
 
-            ; 로그인 완료 대기 (로그아웃 버튼 뜰 때까지)
             try {
                 cUIA.WaitElement({ Name: "로그아웃" }, 10000)
                 Sleep 1000
                 return cUIA
             } catch {
+                LogDebug("[오류] 로그인 후 응답 지연 또는 실패")
                 MsgBox("로그인 후 응답이 지연되거나 실패했습니다.", "오류")
                 return false
             }
-
         } catch as e {
+            LogDebug("[오류] 자동 로그인 실패: " e.Message)
             MsgBox("자동 로그인 실패: " e.Message, "오류", "Iconx")
-            return cUIA
+            return false
         }
     }
 }

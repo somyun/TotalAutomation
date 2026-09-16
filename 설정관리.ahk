@@ -1,4 +1,3 @@
-
 class ConfigManager {
     static ConfigPath := A_ScriptDir "\config.json"
     static Config := Map()
@@ -182,6 +181,7 @@ class ConfigManager {
         lastKey := keys[keys.Length]
         current[lastKey] := value
     }
+
     static GetKey() {
         if FileExist(this.ConfigPath)
             return GetFileID(this.ConfigPath)
@@ -231,4 +231,27 @@ class ConfigManager {
         }
         return allSuccess ; 성공하면 true, 하나라도 실패하면 false 반환
     }
+
+    ; JSONBin.io 클라우드 저장
+    static ReadJson() {
+        global ConfigBinId, ConfigApiKey
+        http := ComObject("WinHttp.WinHttpRequest.5.1")
+        http.Open("GET", "https://api.jsonbin.io/v3/b/" . ConfigBinId . "/latest", false)
+        http.SetRequestHeader("X-Access-Key", ConfigApiKey)
+        http.SetRequestHeader("X-Bin-Meta", "false")  ; 메타데이터 제외, 순수 JSON만 반환
+        http.Send()
+        return http.ResponseText
+    }
+
+    ; ====== JSON 쓰기 ======
+    static WriteJson(JsonData) {
+        global ConfigBinId, ConfigApiKey
+        http := ComObject("WinHttp.WinHttpRequest.5.1")
+        http.Open("PUT", "https://api.jsonbin.io/v3/b/" . ConfigBinId, false)
+        http.SetRequestHeader("Content-Type", "application/json")
+        http.SetRequestHeader("X-Access-Key", ConfigApiKey)
+        http.Send(JsonData)
+        return http.ResponseText
+    }
+
 }

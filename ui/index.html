@@ -6,13 +6,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>통합자동화</title>
     <link rel="stylesheet" href="style.css">
+    <script src="lib/vue.global.prod.js"></script>
 </head>
 
 <body>
     <!-- Custom Title Bar -->
     <div id="title-bar">
         <div id="title-drag-area">
-            <span id="app-title">통합자동화 v3.0</span>
+            <span id="app-title">통합자동화</span>
         </div>
         <div id="window-controls">
             <div class="control-btn" id="btn-min" onclick="window.minimizeWindow()">
@@ -77,14 +78,37 @@
                 <div class="form-group"><label>사번 *</label><input type="text" id="new-id" maxlength="6"></div>
             </div>
 
-            <div class="form-group"><label>근무조</label>
-                <select id="new-team" style="width: 100%;">
-                    <option>A조</option>
-                    <option>B조</option>
-                    <option>C조</option>
-                    <option>D조</option>
-                    <option>일근</option>
-                </select>
+            <div class="form-row">
+                <div class="form-group"><label>부서 *</label>
+                    <select id="new-dept" style="width: 100%;">
+                        <option value="">선택하세요</option>
+                        <option value="5111" data-codeval="">동래변전분소</option>
+                        <option value="5112" data-codeval="">전포변전분소</option>
+                        <option value="5113" data-codeval="">구포변전분소</option>
+                        <option value="5121" data-codeval="">신평전기분소</option>
+                        <option value="5122" data-codeval="">부산진전기분소</option>
+                        <option value="5123" data-codeval="">동래전기분소</option>
+                        <option value="5124" data-codeval="">노포전기분소</option>
+                        <option value="5125" data-codeval="">장산전기분소</option>
+                        <option value="5126" data-codeval="">광안전기분소</option>
+                        <option value="5127" data-codeval="">전포전기분소</option>
+                        <option value="5128" data-codeval="">구명전기분소</option>
+                        <option value="5129" data-codeval="2612021">호포전기분소</option>
+                        <option value="5130" data-codeval="">미남전기분소</option>
+                        <option value="5131" data-codeval="">대저전기분소</option>
+                        <option value="5132" data-codeval="">다대전기관리소</option>
+                        <option value="5133" data-codeval="">남양산전기관리소</option>
+                    </select>
+                </div>
+                <div class="form-group"><label>근무조 *</label>
+                    <select id="new-team" style="width: 100%;">
+                        <option>A조</option>
+                        <option>B조</option>
+                        <option>C조</option>
+                        <option>D조</option>
+                        <option>일근</option>
+                    </select>
+                </div>
             </div>
 
             <div class="form-row">
@@ -319,7 +343,7 @@
                 <!-- Scrollable Content -->
                 <div class="view-content">
                     <div class="erp-container savable-ui" data-save-key="erpLocation">
-                        <div class="erp-compact-layout">
+                        <div class="erp-compact-layout" id="erp-individual-container">
                             <!-- Row 1: Substation -->
                             <div class="erp-row">
                                 <div class="erp-label-col">변전소</div>
@@ -357,6 +381,58 @@
                                 </div>
                             </div>
                         </div>
+
+                        <!-- Batch Mode Layout (Vue Managed) -->
+                        <div class="erp-batch-layout" id="erp-batch-container" style="display: none;">
+                            <div class="erp-batch-table">
+                                <div class="erp-batch-header-row" id="erp-batch-header">
+                                    <div class="batch-col-header type-col">구분</div>
+                                    <div class="batch-col-header loc-col">점검장소</div>
+                                    <div class="batch-col-header workers-group-header">점검자 선택</div>
+                                </div>
+                                <div class="erp-batch-body" id="erp-batch-body">
+                                    <!-- Dynamic rows -->
+                                    <template v-for="(loc, index) in locations" :key="loc.name">
+                                        <div class="erp-batch-row">
+                                            <!-- 1열: 구분 (이전 인덱스와 타입이 다를 때만 렌더링, rowSpan 적용 불가하므로 CSS flex 활용 또는 빈 셀 처리) -->
+                                            <div class="erp-batch-cell type-col"
+                                                :class="{'hide-border': index > 0 && locations[index-1].type === loc.type}">
+                                                <span v-if="index === 0 || locations[index-1].type !== loc.type">{{
+                                                    loc.type }}</span>
+                                            </div>
+                                            <!-- 2열: 점검장소 -->
+                                            <div class="erp-batch-cell loc-col">
+                                                <div class="erp-btn" :class="{ 'selected': isRowActive(loc.name) }"
+                                                    @click="toggleRow(loc.name)">
+                                                    <span v-if="completedOrders.includes(loc.order)"
+                                                        class="order-check-mark"
+                                                        style="color: #00C853; margin-right: 5px; font-weight: bold;">&#10004;&#xFE0E;</span>
+                                                    {{ loc.name }}
+                                                    <span
+                                                        v-if="loc.type === '변전소' && latestStatusMap[loc.name] !== undefined"
+                                                        class="status-dot"
+                                                        :style="{ color: latestStatusMap[loc.name] ? '#4CAF50' : '#FF0000' }"
+                                                        style="font-size: 1.2em; margin-left: 5px; font-weight: bold;"
+                                                        :title="latestStatusMap[loc.name] ? '점검 완료 (오늘)' : '점검 미완료'">●</span>
+                                                    <span v-else-if="loc.type === '변전소'" class="status-dot"
+                                                        style="color: #FFC107; font-size: 1.2em; margin-left: 5px; font-weight: bold;"
+                                                        title="데이터 확인 중...">●</span>
+                                                </div>
+                                            </div>
+                                            <!-- 3열: 점검자 버튼들 (병합된 셀) -->
+                                            <div class="erp-batch-cell workers-group-cell">
+                                                <div class="erp-btn" v-for="w in workers" :key="w.id"
+                                                    :class="{ 'selected': isWorkerSelected(loc.name, w.id) }"
+                                                    :disabled="!isRowActive(loc.name) || null"
+                                                    @click="toggleWorker(loc.name, w.id)">
+                                                    {{ w.name }}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -374,7 +450,7 @@
                         </div>
                         <div class="erp-action-buttons">
                             <button class="secondary-btn" id="btn-erp-mode" onclick="toggleERPMode()">일괄모드 &gt;</button>
-                            <button class="primary-btn large-btn" onclick="openERPWorkerModal()">시작</button>
+                            <button class="primary-btn large-btn" onclick="openERPHandler()">시작</button>
                         </div>
                     </div>
                 </div>
@@ -608,7 +684,8 @@
                                 </div>
                             </div>
                             <div class="form-group">
-                                <button class="secondary-btn full-width" style="margin-top: 10px; height: 40px;"
+                                <button id="btn-approval-info" class="secondary-btn full-width" disabled
+                                    style="margin-top: 10px; height: 40px;"
                                     onclick="runBringApproved()">승인정보 불러오기</button>
                             </div>
                             <div class="form-group">
@@ -661,6 +738,10 @@
                 <div class="tab-item" onclick="switchSettingsTab('tab-location')">작업장소</div>
                 <div class="tab-item" onclick="switchSettingsTab('tab-hotkey')">단축키</div>
                 <div class="tab-item" onclick="switchSettingsTab('tab-updates')">업데이트 내역</div>
+                <div class="settings-cloud-actions">
+                    <button id="btn-import-settings" class="secondary-btn" onclick="importUserSettings()">설정 불러오기</button>
+                    <button id="btn-export-settings" class="primary-btn" onclick="exportUserSettings()">설정 내보내기</button>
+                </div>
             </div>
 
             <div class="settings-content-area">
@@ -674,22 +755,22 @@
                             id="user-id" class="std-input" readonly disabled></div>
                     <div class="std-form-row"><label class="std-label fixed-70">분소</label>
                         <select id="user-dept" class="std-input">
-                            <option value="5111">동래변전분소</option>
-                            <option value="5112">전포변전분소</option>
-                            <option value="5113">구포변전분소</option>
-                            <option value="5121">신평전기분소</option>
-                            <option value="5122">부산진전기분소</option>
-                            <option value="5123">동래전기분소</option>
-                            <option value="5124">노포전기분소</option>
-                            <option value="5125">장산전기분소</option>
-                            <option value="5126">광안전기분소</option>
-                            <option value="5127">전포전기분소</option>
-                            <option value="5128">구명전기분소</option>
-                            <option value="5129">호포전기분소</option>
-                            <option value="5130">미남전기분소</option>
-                            <option value="5131">대저전기분소</option>
-                            <option value="5132">다대전기관리소</option>
-                            <option value="5133">남양산전기관리소</option>
+                            <option value="5111" data-codeval="">동래변전분소</option>
+                            <option value="5112" data-codeval="">전포변전분소</option>
+                            <option value="5113" data-codeval="">구포변전분소</option>
+                            <option value="5121" data-codeval="">신평전기분소</option>
+                            <option value="5122" data-codeval="">부산진전기분소</option>
+                            <option value="5123" data-codeval="">동래전기분소</option>
+                            <option value="5124" data-codeval="">노포전기분소</option>
+                            <option value="5125" data-codeval="">장산전기분소</option>
+                            <option value="5126" data-codeval="">광안전기분소</option>
+                            <option value="5127" data-codeval="">전포전기분소</option>
+                            <option value="5128" data-codeval="">구명전기분소</option>
+                            <option value="5129" data-codeval="2612021">호포전기분소</option>
+                            <option value="5130" data-codeval="">미남전기분소</option>
+                            <option value="5131" data-codeval="">대저전기분소</option>
+                            <option value="5132" data-codeval="">다대전기관리소</option>
+                            <option value="5133" data-codeval="">남양산전기관리소</option>
                         </select>
                     </div>
                     <div class="std-form-row"><label class="std-label fixed-70">근무조</label>
@@ -744,13 +825,14 @@
                 <div id="tab-location" class="settings-tab-pane">
                     <div class="tab-header" style="display:flex; justify-content:space-between; align-items:center;">
                         <h2>ERP점검</h2>
-                        <div style="font-size:14px; display: flex; align-items: center; white-space: nowrap;">
-                            <label style="margin-right:5px;">점검자 표시형식 : </label>
-                            <select id="erp-format-pref" style="padding:2px;">
-                                <option value="summary">대표자 외 N명</option>
-                                <option value="list">전원 나열식</option>
-                            </select>
-                        </div>
+                        <button id="btn-import-locations" class="secondary-btn small" onclick="importLocationsFromHeadless()" disabled style="margin-right: 10px;">불러오기</button>
+                    </div>
+                    <div style="font-size:14px; display: flex; align-items: center; justify-content: flex-end; white-space: nowrap; margin-bottom: 10px;">
+                        <label style="margin-right:5px;">점검자 입력형식 : </label>
+                        <select id="erp-format-pref" style="padding:2px; width: 130px;"">
+                            <option value="summary">대표자 외 N명</option>
+                            <option value="list">전원 나열식</option>
+                        </select>
                     </div>
                     <div class="table-wrapper">
                         <table id="location-table">
@@ -866,20 +948,28 @@
 
                     <!-- 3. General Work -->
                     <div class="preset-section">
-                        <h3>일반업무 (기본값)</h3>
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 10px;">
+                            <h3>일반업무 (기본값)</h3>
+                            <div class="toggle-group" style="margin-left: 20px;">
+                                <span id="lbl-gw-day" class="bold-active">주간</span>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="fps-general-work-toggle" onchange="toggleGeneralWorkShift()">
+                                    <span class="slider round"></span>
+                                </label>
+                                <span id="lbl-gw-night">야간</span>
+                            </div>
+                        </div>
                         <div class="table-wrapper">
                             <table id="general-work-table">
                                 <thead>
                                     <tr>
-                                        <!-- 근무: 주간/야간/공통 -->
-                                        <th width="10%">근무</th>
                                         <!-- 분류: 일상/특별 등 -->
                                         <th width="15%">분류</th>
-                                        <th width="35%">내용</th>
-                                        <th width="15%">책임자</th> <!-- 사번/이름 저장 -->
+                                        <th width="43%">내용</th>
+                                        <th width="12%">책임자</th> <!-- 사번/이름 저장 -->
                                         <th width="10%">시작</th>
                                         <th width="10%">종료</th>
-                                        <th width="5%">삭제</th>
+                                        <th width="10%">삭제</th>
                                     </tr>
                                 </thead>
                                 <tbody></tbody>
@@ -949,7 +1039,7 @@
                     <!-- Dynamic Content -->
                 </div>
                 <div class="modal-option-row">
-                    <span>점검자 표시형식</span>
+                    <span>점검자 입력형식</span>
                     <button id="btn-erp-modal-toggle" class="text-toggle-btn" onclick="toggleModalWorkerFormat()">
                         대표자 외 0명
                     </button>
@@ -961,6 +1051,71 @@
         </div>
     </div>
 
+    <!-- ERP Batch Confirmation Modal (Vue Managed) -->
+    <div id="erp-batch-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>ERP 일괄모드</h3>
+                <button class="close-btn-icon" @click="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="batch-confirm-list">
+                    <div v-for="item in batchPreviewList" :key="item.locName" class="batch-confirm-item">
+                        <span class="batch-confirm-loc">{{ item.locName }} </span>
+                        <span class="batch-confirm-dash">-</span>
+                        <span class="batch-confirm-workers"> {{ item.workersText }}</span>
+                    </div>
+                </div>
+                <!-- 하단 포맷 토글 스위치는 개별 모드와 시각적으로 동일하게 구성 -->
+                <div class="modal-option-row">
+                    <span>점검자 입력형식</span>
+                    <button class="text-toggle-btn" @click="toggleFormat()">
+                        {{ isListFormat ? '전원 나열식' : '대표자 외 ' + (previewMaxCount > 0 ? previewMaxCount : 0) + '명' }}
+                    </button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="primary-btn full-width" @click="submitBatchTask()">시작</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Missing Password Warning Modal -->
+      <div id="missing-pw-modal" class="modal-overlay" style="display: none; z-index: 9999;">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3>비밀번호 미지정 안내</h3>
+                <button class="close-btn-icon" onclick="closeMissingPwModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding-bottom: 10px;">
+                <div id="missing-pw-desc" style="font-size:14px; color:#333; line-height:1.5; margin-bottom:15px;">
+                    <!-- JS에서 동적 삽입 -->
+                </div>
+                <div style="font-size:14px; color:#333; margin-bottom:15px; font-weight: bold;">
+                    해당 비밀번호를 지정하시겠습니까?
+                </div>
+                <div class="modal-option-row" style="margin-top:0;">
+                    <label class="checkbox-label" style="display:flex; align-items:center; gap:8px;">
+                        <input type="checkbox" id="chk-hide-missing-pw">
+                        <span style="font-size:13px; color:#666;">다시 묻지 않음</span>
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 10px;">
+                <button class="primary-btn" style="flex: 1;" onclick="goSetMissingPw()">예</button>
+                <button class="secondary-btn" style="flex: 1;" onclick="closeMissingPwModal()">아니오</button>
+            </div>
+        </div>
+      </div>
+
+      <!-- Session Status Overlay -->
+    <div id="session-status-overlay" class="session-overlay">
+        <span id="session-status-text">준비완료</span>
+    </div>
+
+    <!-- ERP FormList Firestore 실시간 구독용 SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
     <script src="app.js"></script>
 </body>
 

@@ -11,27 +11,92 @@ class ERP점검 {
     ; --------------------------------------------------------------------------
     ; Entry Point
     ; --------------------------------------------------------------------------
-    static Start(msg) {
-
-        location := msg.Has("location") ? msg["location"] : ""
-        members := msg.Has("members") ? msg["members"] : []
-        format := msg.Has("format") ? msg["format"] : "summary"
-        targetType := msg.Has("targetType") ? msg["targetType"] : ""
-        targetOrder := msg.Has("targetOrder") ? msg["targetOrder"] : ""
+    static Start(msg, batchmode) {
         userID := msg.Has("ID") ? msg["ID"] : ""
         userPW := msg.Has("sapPW") ? msg["sapPW"] : ""
 
         if (userPW == "") {
             MsgBox("SAP PW 지정되지 않아 실행할 수 없습니다", "오류", "iconx")
-            return
+            return false
         }
 
-        if (location == "") {
-            MsgBox("예외 발생 : 장소 미지정", "오류", "iconx")
-            return
-        }
+        if (batchmode) {
+            locations := msg["location"] ; Array of location objects
+            downQueue := []
+            locationMsg := ""
 
-        ; 1. 멤버 문자열 조합
+            ; 1. 다운로드 대상 수집
+            for item in locations {
+                loc := item["location"]
+                if (item["targetType"] == "변전소" && this.ValidLocations.Has(loc)) {
+                    downQueue.Push(loc)
+                } else if (item["targetType"] == "변전소" && !this.ValidLocations.Has(loc)) {
+                    MsgBox("웹앱에 " loc "의 데이터가 저장되어있지 않습니다.`n ERP 작업보고 일괄모드를 중단합니다.", "진행불가", "0x1 Icon!")
+                    return false
+                }
+            }
+
+            ; 2. 다운로드 비동기 큐 실행 (cmd & 체인)
+            if (downQueue.Length > 0) {
+                this.BatchDownSheetAsync(downQueue)
+            }
+
+            ; 3. 매크로 큐 실행
+            for item in locations {
+                loc := item["location"]
+                mems := item["members"]
+                type := item["targetType"]
+                order := item["targetOrder"]
+
+                memberStr := this.GetMemberStr(mems, msg.Has("format") ? msg["format"] : "summary")
+                this.Macro(memberStr, loc, userID, userPW, type, order, true)
+                locationMsg .= loc ", "
+            }
+
+            locationMsg := RTrim(locationMsg, ", ")
+            MsgBox("ERP 일괄 입력이 완료되었습니다.`n[진행 장소: " locationMsg "]", "완료", "iconi")
+            return true
+        }
+        else {
+            ; 개별 모드
+            loc := msg.Has("location") ? msg["location"] : ""
+            mems := msg.Has("members") ? msg["members"] : []
+            type := msg.Has("targetType") ? msg["targetType"] : ""
+            order := msg.Has("targetOrder") ? msg["targetOrder"] : ""
+
+            if (loc == "") {
+                MsgBox("예외 발생 : 장소 미지정", "오류", "iconx")
+                return false
+            }
+            if (mems.Length == 0) {
+                MsgBox("예외 발생 : 작업자 미지정", "오류", "iconx")
+                return false
+            }
+
+            memberStr := this.GetMemberStr(mems, msg.Has("format") ? msg["format"] : "summary")
+
+            if (type == "변전소") {
+                if (this.ValidLocations.Has(loc)) {
+                    if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . loc . " (WEB앱 연동)`n점검자 : " . memberStr, "진행합니다",
+                        "0x1 Iconi") != "OK")
+                        return false
+                    this.DownSheetAsync(loc)
+                } else {
+                    if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . loc . " (엑셀 수동입력)`n점검자 : " . memberStr, "진행합니다",
+                        "0x1 Icon!") != "OK")
+                        return false
+                    this.OpenLocalExcel(loc)
+                }
+            } else {
+                if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . loc . "`n점검자 : " . memberStr, "진행합니다", "0x1 Iconi") != "OK")
+                    return false
+            }
+
+            return this.Macro(memberStr, loc, userID, userPW, type, order, false)
+        }
+    }
+
+    static GetMemberStr(members, format) {
         memberStr := ""
         if (members.Length > 0) {
             if (format == "summary") {
@@ -41,76 +106,49 @@ class ERP점검 {
                     memberStr .= (index == 1 ? "" : ", ") . name
                 }
             }
-        } else {
-            MsgBox("예외 발생 : 작업자 미지정", "오류", "iconx")
-            return
         }
-
-        ; 2. 점검 시작 (폴링 상태 기반 분기)
-        isSubstation := (targetType == "변전소")
-        isWebMode := false
-
-        if (isSubstation) {
-            if (this.ValidLocations.Has(location)) {
-                ; [GREEN] WEB 연동 가능
-                isWebMode := true
-                if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . location . " (WEB앱 연동)`n점검자 : " . memberStr,
-                    "진행합니다", "0x1 Iconi") != "OK") {
-                    return
-                }
-                ; 비동기 다운로드 시작 (SAP 실행되는 동안 백그라운드 다운로드)
-                this.DownSheetAsync(location)
-            } else {
-                ; [RED] WEB 연동 불가 (또는 아직 작성 안됨) -> 수동 모드
-                if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . location . " (엑셀 수동입력)`n점검자 : " . memberStr,
-                    "진행합니다", "0x1 Icon!") != "OK") {
-                    return
-                }
-                ; 로컬 엑셀 열기 (사용자가 확인/수정 후 종료하면 계속 진행)
-                this.OpenLocalExcel(location)
-            }
-        } else {
-            ; 변전소 외 (전기실 등)
-            if (MsgBox("ERP 작업보고를 시작합니다.`n`n장소 : " . location . "`n점검자 : " . memberStr,
-                "진행합니다", "0x1 Iconi") != "OK") {
-                return
-            }
-        }
-
-        ; 3. SAP 자동 입력 실행
-        ; isWebMode 플래그는 여기서 딱히 필요 없지만(파일 날짜로 체크하므로), 로직 흐름상 명확히 함
-        this.Macro(memberStr, location, userID, userPW, targetType, targetOrder)
+        return memberStr
     }
 
     ; --------------------------------------------------------------------------
     ; Web / Excel Logic
     ; --------------------------------------------------------------------------
+    static BatchDownSheetAsync(locations) {
+        global XlsxGasURL, TARGET_SPREADSHEET_ID
+        cmds := ""
 
-    ; --------------------------------------------------------------------------
-    ; Pre-Check Logic (Added for V3)
-    ; --------------------------------------------------------------------------
-    static PreCheck(location) {
-        ; Start에서 폴링 상태를 기반으로 판단하므로,
-        ; 모달 진입 시점의 팝업(PreCheck)은 제거합니다.
-        return
+        for index, ss in locations {
+            ec_ss := URLEncode(ss)
+            url := XlsxGasURL . "?fileId=" . TARGET_SPREADSHEET_ID . "&sheetName=" . ec_ss . "&filename=" . ec_ss .
+                ".xlsx"
+            tempFile := A_WorkingDir . "\temp_" . ss . ".json"
+            localFile := A_WorkingDir . "\" . ss . ".xlsx"
+
+            if FileExist(tempFile)
+                FileDelete(tempFile)
+            if FileExist(localFile)
+                FileDelete(localFile)
+
+            curlCmd := 'curl -sL --ssl-no-revoke -o "' . tempFile . '" "' . url . '"'
+            if (index == 1)
+                cmds := curlCmd
+            else
+                cmds .= " & " . curlCmd
+        }
+
+        if (cmds != "")
+            Run(A_ComSpec ' /c ' cmds, , "Hide")
     }
 
-    ; --------------------------------------------------------------------------
-    ; Web / Excel Logic
-    ; --------------------------------------------------------------------------
     static DownSheetAsync(ss) {
-        global WebAppURL, TARGET_SPREADSHEET_ID
+        global XlsxGasURL, TARGET_SPREADSHEET_ID
 
         try {
             ec_ss := URLEncode(ss)
-            url := WebAppURL . "?fileId=" . TARGET_SPREADSHEET_ID . "&sheetName=" . ec_ss . "&filename=" . ec_ss .
+            url := XlsxGasURL . "?fileId=" . TARGET_SPREADSHEET_ID . "&sheetName=" . ec_ss . "&filename=" . ec_ss .
                 ".xlsx"
 
-            ; 임시 JSON 파일 경로 (고정된 이름 사용 또는 ID 기반)
-            ; 여기서는 간편함을 위해 working dir에 temp_ + location + .json 저장
             tempFile := A_WorkingDir . "\temp_" . ss . ".json"
-
-            ; 기존 임시 파일 및 타겟 엑셀 파일 삭제
             if FileExist(tempFile)
                 FileDelete(tempFile)
 
@@ -118,8 +156,6 @@ class ERP점검 {
             if FileExist(localFile)
                 FileDelete(localFile)
 
-            ; 비동기 실행 (Run) - JSON으로 다운로드됨
-            ; -s: Silent, -L: Follow redirects, -o: Output file
             Run 'curl -sL --ssl-no-revoke -o "' . tempFile . '" "' . url . '"', , "Hide"
             return true
         } catch {
@@ -133,53 +169,84 @@ class ERP점검 {
     static ProcessDownload(ss) {
         tempFile := A_WorkingDir . "\temp_" . ss . ".json"
         targetFile := A_WorkingDir . "\" . ss . ".xlsx"
+        tempTarget := A_WorkingDir . "\" . ss . "_writing.xlsx"
 
-        if !FileExist(tempFile)
+        if !FileExist(tempFile) {
+            LogDebug("ProcessDownload [" ss "]: tempFile 없음 → 다운로드 미완료")
             return false
+        }
 
         try {
-            ; 1. JSON 읽기
-            ; 파일이 쓰기 중일 수 있으므로 읽기 시도
             fileContent := ""
             try {
                 fileContent := FileRead(tempFile, "UTF-8")
             } catch {
-                return false ; 아직 다운로드 중이거나 락 걸림
+                LogDebug("ProcessDownload [" ss "]: tempFile 읽기 실패 (락 또는 쓰기 중)")
+                return false
             }
 
-            if (fileContent == "")
+            if (fileContent == "") {
+                LogDebug("ProcessDownload [" ss "]: tempFile 비어있음")
                 return false
+            }
 
-            ; 2. 파싱 및 디코딩
             data := JSON.parse(fileContent)
 
             if (data.Has("error")) {
+                LogDebug("ProcessDownload [" ss "]: 서버 오류 → " data["error"])
                 MsgBox("서버 오류: " . data["error"], "오류", "iconx")
-                try FileDelete(tempFile) ; 에러 파일 삭제
-                return false ; 영구 실패지만 루프에서 계속 재시도하지 않도록 처리는 상위에서
-            }
-
-            if (!data.Has("base64")) {
-                ; JSON 형식이 아님 (혹시라도 그냥 엑셀이 받아진 경우?)
+                try FileDelete(tempFile)
                 return false
             }
 
-            base64Str := data["base64"]
-            binaryData := this.BufferFromBase64(base64Str)
+            if (!data.Has("base64")) {
+                LogDebug("ProcessDownload [" ss "]: base64 키 없음 (JSON 구조 이상)")
+                return false
+            }
 
-            ; 3. 엑셀 파일로 저장
-            f := FileOpen(targetFile, "w")
+            binaryData := this.BufferFromBase64(data["base64"])
+            LogDebug("ProcessDownload [" ss "]: 디코딩 완료, 크기=" binaryData.Size " bytes")
+
+            ; 원자적 쓰기: 임시 파일에 먼저 쓰고 완료 후 rename
+            f := FileOpen(tempTarget, "w")
             f.RawWrite(binaryData)
             f.Close()
 
-            ; 4. 성공 시 임시 파일 삭제
+            if FileExist(targetFile)
+                FileDelete(targetFile)
+            FileMove(tempTarget, targetFile)
+
+            LogDebug("ProcessDownload [" ss "]: xlsx 저장 완료")
             try FileDelete(tempFile)
             return true
 
         } catch as e {
-            ; 파싱 에러 등은 아직 다운로드가 덜 되어서 그럴 수 있음
+            LogDebug("ProcessDownload [" ss "]: 예외 → " e.Message)
+            if FileExist(tempTarget)
+                try FileDelete(tempTarget)
             return false
         }
+    }
+
+    ; --------------------------------------------------------------------------
+    ; 다운로드 완료 폴링 대기 (비동기 curl이 tempFile을 완성할 때까지)
+    ; --------------------------------------------------------------------------
+    static WaitForDownload(ss, timeoutSec := 30) {
+        tempFile := A_WorkingDir . "\temp_" . ss . ".json"
+        maxTicks := (timeoutSec * 1000) // 200
+
+        loop maxTicks {
+            if FileExist(tempFile) {
+                try {
+                    if FileGetSize(tempFile) > 200
+                        return true
+                }
+            }
+            Sleep 200
+        }
+
+        LogDebug("WaitForDownload [" ss "]: " timeoutSec "초 타임아웃")
+        return false
     }
 
     static BufferFromBase64(str) {
@@ -220,7 +287,7 @@ class ERP점검 {
     ; --------------------------------------------------------------------------
     ; SAP Automation Logic
     ; --------------------------------------------------------------------------
-    static Macro(member, ss, uID, uPW, targetType, targetOrder) {
+    static Macro(member, ss, uID, uPW, targetType, targetOrder, batchMode) {
 
         chk1 := true
         chk2 := true
@@ -231,7 +298,7 @@ class ERP점검 {
             Run("작업보고.sap")
         } catch {
             MsgBox("작업보고.sap 실행 파일을 찾을 수 없습니다.", "오류", "iconx")
-            return
+            return false
         }
 
         loop 150 { ; SAP 진입 대기 (약 15초)
@@ -284,7 +351,7 @@ class ERP점검 {
                 orderNum := targetOrder
                 if (orderNum == "") {
                     MsgBox("해당 장소(" . ss . ")의 오더번호를 찾을 수 없습니다.`n설정을 확인해주세요.", "오류", "iconx")
-                    return
+                    return false
                 }
 
                 Send orderNum . "{Enter}"
@@ -293,7 +360,7 @@ class ERP점검 {
 
             if (A_Index == 150) {
                 MsgBox("시간초과: SAP 실행 실패", "오류", "iconx")
-                return
+                return false
             }
         }
 
@@ -356,7 +423,7 @@ class ERP점검 {
                         break ; 변환 성공 (이제 Loop 다시 돌면 1번 조건 만족)
                     }
 
-                    if (A_Index == 20) {
+                    if (A_Index == 60) {
                         MsgBox("점검데이터 다운로드에 실패하였습니다`n처음부터 다시 시도하시기 바랍니다", "타임아웃", "iconx")
                         return ; 매크로 중단
                     }
@@ -369,7 +436,7 @@ class ERP점검 {
             }
             else {
                 MsgBox("시간초과로 종료합니다 - 불러오기 실패", "타임아웃", "iconx")
-                ExitApp
+                return false
             }
 
             ;입력확인
@@ -398,142 +465,144 @@ class ERP점검 {
                 send "{end}"
                 if A_Index > 40 {
                     MsgBox("시간초과로 종료합니다 - 측정값 입력 실패", "타임아웃", "iconx")
-                    ExitApp
+                    return false
                 }
 
             }
             CoordMode "Pixel", "Client"
         }
 
-        MsgBox("입력이 완료되었습니다.`nERP 화면을 확인 후 저장하시기 바랍니다.", "완료", "iconi")
-
-        return
+        if !batchMode
+            MsgBox("입력이 완료되었습니다.`nERP 화면을 확인 후 저장하시기 바랍니다.", "완료", "iconi")
+        else {
+            send "^s"
+            WinWait "SAP Easy Access  -  사용자 메뉴"
+        }
+        return true
     }
     ; --------------------------------------------------------------------------
-    ; Polling Logic
+    ; Firestore Realtime FormList
+    ;
+    ; 데이터 흐름:
+    ; 1) ui/app.js가 Firestore publicCache/formList를 onSnapshot으로 구독합니다.
+    ; 2) 문서가 변경되면 WebView2 메시지(updateERPFormList)로 Main.ahk에 전달됩니다.
+    ; 3) Main.ahk가 이 클래스의 ApplyFormList()를 호출합니다.
+    ; 4) 여기서는 오늘 수정된 시트만 골라 ValidLocations와 화면 상태를 갱신합니다.
+    ;
+    ; 이전 StartPolling/RequestStatus 방식과 달리 이 구간에서는 GAS를 주기적으로
+    ; 호출하지 않습니다. 네트워크 구독은 ui/app.js가 담당하고, AHK는 전달받은
+    ; 최신 목록을 보관하여 필터링과 날짜 변경 시의 로컬 재계산만 담당합니다.
     ; --------------------------------------------------------------------------
 
-    static IsPolling := false
+    ; Firestore에서 마지막으로 전달받은 전체 FormList입니다.
+    ; 자정이 지나면 서버에 다시 요청하지 않고 이 목록을 사용해 상태를 재계산합니다.
+    static FormListItems := []
 
-    static StartPolling() {
-        ; 1분마다 상태 갱신 요청
-        SetTimer () => ERP점검.RequestStatus(), 60000
-        ; 시작 시 즉시 1회 실행
-        ERP점검.RequestStatus()
+    ; 실시간 상태 초기화와 자정 타이머가 중복 등록되는 것을 막는 플래그입니다.
+    static RealtimeStatusStarted := false
+
+    ; SetTimer에 같은 콜백 객체를 전달해 기존 예약을 해제하고 다시 등록할 수 있도록
+    ; 바인딩한 콜백을 정적 변수에 보관합니다.
+    static MidnightRefreshCallback := ""
+
+    ; WebView와 메시지 수신 준비가 끝난 뒤 실시간 상태 처리를 한 번만 시작합니다.
+    ; Firestore 연결을 직접 시작하는 함수는 아니며, ui/app.js의 구독 결과가 오기
+    ; 전에도 현재 보관된 목록(초기에는 빈 배열)으로 화면 상태를 안전하게 초기화합니다.
+    static StartRealtimeStatus() {
+        if (this.RealtimeStatusStarted)
+            return
+
+        this.RealtimeStatusStarted := true
+
+        ; 자정 경계에서 날짜 필터를 다시 적용하도록 1회성 타이머를 예약합니다.
+        this.ScheduleMidnightRefresh()
+
+        ; 최초 표시 시 남아 있을 수 있는 상태를 현재 날짜 기준으로 정리합니다.
+        this.RefreshStatusForToday()
     }
 
-    static RequestStatus() {
-
-        ; 폴링 중복 방지
-        if (this.IsPolling) {
-            return
+    ; Main.ahk가 WebView2의 updateERPFormList 메시지를 받은 뒤 호출하는 진입점입니다.
+    ; 전달된 스냅샷 전체를 교체 저장하고, 기존 목록 필터링 규칙을 즉시 다시 적용합니다.
+    ; 이 함수에서는 curl, GAS GET 요청 또는 반복 타이머를 사용하지 않습니다.
+    static ApplyFormList(items) {
+        ; 예상하지 못한 메시지 때문에 기존 정상 목록이 훼손되지 않도록 배열만 받습니다.
+        if !(items is Array) {
+            LogDebug("[ERP FormList] Firestore 목록 형식이 올바르지 않음")
+            return false
         }
 
-        this.IsPolling := true
+        ; Firestore 스냅샷은 목록 전체의 최신 상태이므로 이전 캐시를 통째로 교체합니다.
+        this.FormListItems := items
 
-        global WebAppURL
-        url := WebAppURL . "?action=getFormList"
-        tempFile := A_ScriptDir . "\erp_status_temp.json"
+        ; 초기화보다 실시간 메시지가 먼저 도착한 경우에도 자정 타이머를 빠짐없이 설정합니다.
+        if (!this.RealtimeStatusStarted)
+            this.StartRealtimeStatus()
 
-        ; 기존 파일 정리
-        if FileExist(tempFile) {
-            try FileDelete tempFile
-        }
-
-        ; 비동기(Non-blocking) 실행: 외부 프로세스에 위임
-        ; -s: Silent, -o: Output file, -L: Follow redirects (GAS 필수)
-        ; curl이 없으면 실패하겠지만 Windows 10/11은 기본 내장됨
-        cmd := 'curl.exe -skL "' . url . '" -o "' . tempFile . '"'
-
-        try {
-            Run cmd, , "Hide"
-        } catch {
-            ; curl 실행 실패 시 (경로 문제 등) silent 하게 넘어갑니다.
-            this.IsPolling := false
-            return
-        }
-
-        ; 타이머 콜백 초기화 (최초 1회)
-        if !HasProp(ERP점검, "TimerCallback") || !ERP점검.TimerCallback
-            ERP점검.TimerCallback := ObjBindMethod(ERP점검, "CheckResponse")
-
-        ; 결과 확인 타이머 시작 (0.2초 간격)
-        ERP점검.CheckCount := 0
-        SetTimer ERP점검.TimerCallback, 200
+        ; 새 목록을 받은 즉시 오늘 날짜 기준의 유효 사업장과 화면 표시를 갱신합니다.
+        this.RefreshStatusForToday()
+        LogDebug("[ERP FormList] Firestore 실시간 목록 반영: " items.Length "건")
+        return true
     }
 
-    static CheckCount := 0
-    static TimerCallback := ""
+    ; 마지막으로 수신한 FormList를 오늘 날짜 기준으로 로컬에서 필터링합니다.
+    ; 기존 RequestStatus가 하던 핵심 규칙인 "오늘 수정된 sheetName만 유효"를 유지하되,
+    ; 서버 요청 없이 ValidLocations와 WebView 화면 상태를 한 번에 다시 만듭니다.
+    static RefreshStatusForToday() {
+        global wv
 
-    static CheckResponse() {
-        tempFile := A_ScriptDir . "\erp_status_temp.json"
+        ; 이전 날짜나 삭제된 항목이 남지 않도록 두 Map을 매번 빈 상태에서 재구성합니다.
+        statusMap := Map()
+        this.ValidLocations := Map()
+        todayStr := FormatTime(, "yyyy-MM-dd")
 
-        ; CheckCount가 없으면 초기화 (만약을 대비)
-        if !HasProp(ERP점검, "CheckCount")
-            ERP점검.CheckCount := 0
+        for item in this.FormListItems {
+            ; 필수 필드가 없는 비정상 항목은 전체 갱신을 중단하지 않고 건너뜁니다.
+            if !(item is Map) || !item.Has("lastModifiedDate") || !item.Has("sheetName")
+                continue
 
-        ERP점검.CheckCount += 1
+            ; Firebase가 미리 계산한 서울 날짜를 우선 사용하고, 구형 데이터와의 호환을
+            ; 위해 없을 때만 원본 lastModifiedDate에서 오늘 날짜 문자열을 확인합니다.
+            itemDate := item.Has("seoulDate") ? item["seoulDate"] : item["lastModifiedDate"]
+            if (itemDate == todayStr || InStr(itemDate, todayStr)) {
+                name := Trim(item["sheetName"])
+                if (name == "")
+                    continue
 
-        ; 타임아웃 처리 (약 10초 = 50회)
-        if (ERP점검.CheckCount > 50) {
-            if (ERP점검.TimerCallback)
-                SetTimer ERP점검.TimerCallback, 0 ; 타이머 중지
-
-            if FileExist(tempFile)
-                try FileDelete tempFile
-
-            this.IsPolling := false
-            return
-        }
-
-        if !FileExist(tempFile)
-            return
-
-        ; 파일 읽기 시도
-        try {
-            fileContent := FileRead(tempFile, "UTF-8")
-            if (fileContent == "")
-                return ; 아직 다 안 써진 경우
-
-            ; JSON 파싱 시도
-            data := JSON.parse(fileContent)
-
-            ; --- 성공 시 처리 ---
-            if (ERP점검.TimerCallback)
-                SetTimer ERP점검.TimerCallback, 0 ; 타이머 중지
-
-            try FileDelete tempFile
-
-            ; 폴링 상태 해제
-            this.IsPolling := false
-
-            global wv
-            statusMap := Map()
-            todayStr := FormatTime(, "yyyy-MM-dd")
-
-            if (data is Array) {
-                ERP점검.ValidLocations := Map() ; 캐시 초기화
-                for item in data {
-                    if (!item.Has("lastModifiedDate") || !item.Has("sheetName"))
-                        continue
-
-                    lmDateRaw := item["lastModifiedDate"]
-                    if InStr(lmDateRaw, todayStr) {
-                        name := Trim(item["sheetName"]) ; 공백 제거
-                        statusMap[name] := true
-                        ERP점검.ValidLocations[name] := true ; 유효 목록 업데이트
-                    }
-                }
+                ; statusMap은 UI 표시용, ValidLocations는 이후 XLSX 처리 가능 여부 확인용입니다.
+                statusMap[name] := true
+                this.ValidLocations[name] := true
             }
-
-            ; WebView로 전송
-            payload := Map("type", "updateERPStatus", "status", statusMap)
-            jsonStr := JSON.stringify(payload)
-            wv.PostWebMessageAsJson(jsonStr)
-
-        } catch as e {
-            ; JSON 파싱 에러 등은 무시하고 다음 틱 재시도
         }
+
+        ; 계산된 결과만 WebView에 전달합니다. Firestore 또는 GAS로 나가는 요청은 없습니다.
+        payload := Map("type", "updateERPStatus", "status", statusMap)
+        try wv.PostWebMessageAsJson(JSON.stringify(payload))
+    }
+
+    ; 다음 로컬 자정 직후에 HandleMidnightRefresh()가 한 번 실행되도록 예약합니다.
+    ; 매분/5분 반복 타이머가 아니라, 실행될 때마다 다음 자정을 다시 계산하는 1회성
+    ; 타이머이므로 날짜가 바뀌지 않는 동안에는 아무 처리도 하지 않습니다.
+    static ScheduleMidnightRefresh() {
+        if (!this.MidnightRefreshCallback)
+            this.MidnightRefreshCallback := ObjBindMethod(this, "HandleMidnightRefresh")
+
+        ; 같은 콜백에 남아 있을 수 있는 기존 예약을 먼저 해제하여 중복 실행을 방지합니다.
+        SetTimer this.MidnightRefreshCallback, 0
+        todayStart := FormatTime(, "yyyyMMdd") . "000000"
+        nextMidnight := DateAdd(todayStart, 1, "Days")
+        secondsUntilMidnight := DateDiff(nextMidnight, A_Now, "Seconds")
+
+        ; 시스템 시각 경계 오차로 전날로 계산되는 일을 피하려고 자정 1초 뒤 실행합니다.
+        delayMs := Max(1000, secondsUntilMidnight * 1000 + 1000)
+        SetTimer this.MidnightRefreshCallback, -delayMs
+    }
+
+    ; 날짜가 바뀌면 보관 중인 FormList만으로 오늘 상태를 다시 계산한 뒤,
+    ; 다음 날 자정 실행을 다시 예약합니다. 이 과정에서도 네트워크 요청은 없습니다.
+    static HandleMidnightRefresh() {
+        this.RefreshStatusForToday()
+        this.ScheduleMidnightRefresh()
+        LogDebug("[ERP FormList] 날짜 변경으로 로컬 상태 재계산")
     }
 }
 
@@ -580,7 +649,7 @@ GetCaretPos(&X, &Y, &W, &H) {
         	but in reality is not. The only downside to using GetSelections is that when text
         	is selected then caret position is ambiguous. Nevertheless, in those cases it most
         	likely doesn't matter much whether the caret is in the beginning or end of the selection.
-        
+
         	If GetCaretRange is needed then the following code implements that:
         	ComCall(16, FocusedEl, "int", 10024, "ptr*", &patternObject:=0), ObjRelease(FocusedEl) ; GetCurrentPattern. TextPattern2 = 10024
         	if patternObject {

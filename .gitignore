@@ -2,12 +2,15 @@
 
 # 설정파일
 config.json
+ui/config copy.json
 
 # 빌드/배포용 폴더 제외
 dist/
 build/
+build-release/
 debug_bg.txt
 debug_main.txt
+dist.zip
 
 #테스트용 파일 제외
 .restart_login
@@ -15,3 +18,6 @@ restore_state.json
 NetworkTest.ahk
 test.json
 터미널명령어.txt
+.session.dat
+.session.dat.tmp
+세션BG.txt

@@ -108,31 +108,70 @@ Mattest(testNum) { ;test
     return testMat
 }
 
+; ==========================================================
+; [수정됨] 무제한 길이 & 한글 완벽 지원을 위한 새로운 Encrypt 래퍼
+; ==========================================================
 Encrypt(plaintext, key, testMat := "", keyMat := "") {
+    ; 1. 한글 및 특수문자 보호를 위해 평문을 Base64로 인코딩
+    safeB64 := Str_to_B64(plaintext)
 
+    ; 2. 15글자 단위로 자르기 (설명: 16칸을 꽉 채우면 발생하는 내부 패딩 버그를 피하기 위해 1칸은 여유를 둠)
+    finalCipher := ""
+    len := StrLen(safeB64)
+    pos := 1
+
+    while (pos <= len) {
+        chunk := SubStr(safeB64, pos, 15)
+        finalCipher .= EncryptBlock(chunk, key, testMat, keyMat) ; 1블록(15글자) 암호화하여 이어 붙임
+        pos += 15
+    }
+    return finalCipher
+}
+
+; (기존 Encrypt 함수 이름을 EncryptBlock으로 변경)
+EncryptBlock(plaintext, key, testMat := "", keyMat := "") {
     state := Matrix(plaintext).inverse()  ;행렬변환 패딩포함
     chipherKey := Matrix(key).inverse()   ;행렬변환 패딩포함
     if testMat != ""
         state := testMat, chipherkey := keyMat
 
-    state := addRound(state, chipherKey, 0)                 ; Addroundkey
+    state := addRound(state, chipherKey, 0)                 ;Addroundkey
 
     loop 9 {
-        sBoxState := SubBytes(state)                        ; s-box 변환
-        rShiftstate := shiftRows(sBoxstate)                 ; rowShifts
-        mixCstate := mixColumns(rShiftstate)                ; mixColumns
-        state := addRound(mixCstate, chipherKey, A_Index)   ; Addroundkey
+        sBoxState := SubBytes(state)                        ;s-box 변환
+        rShiftstate := shiftRows(sBoxstate)                 ;rowShifts
+        mixCstate := mixColumns(rShiftstate)                ;mixColumns
+        state := addRound(mixCstate, chipherKey, A_Index)   ;Addroundkey
     }
 
-    sBoxState := SubBytes(state)                            ; s-box 변환
-    rShiftstate := shiftRows(sBoxstate)                     ; rowShifts
-    state := addRound(rShiftstate, chipherKey, 10)          ; Addroundkey
+    sBoxState := SubBytes(state)                            ;s-box 변환
+    rShiftstate := shiftRows(sBoxstate)                     ;rowShifts
+    state := addRound(rShiftstate, chipherKey, 10)          ;Addroundkey
 
     return HexMat_to_B64(state)
 }
 
+; ==========================================================
+; [수정됨] 무제한 길이 & 한글 완벽 지원을 위한 새로운 Decrypt 래퍼
+; ==========================================================
 Decrypt(encryptedText, key, testMat := "", keyMat := "") {
+    len := StrLen(encryptedText)
+    decryptedB64 := ""
+    pos := 1
 
+    ; 1. 24글자(Base64로 출력된 블록 1개 크기)씩 잘라서 연속 복호화
+    while (pos <= len) {
+        chunk := SubStr(encryptedText, pos, 24)
+        decryptedB64 .= DecryptBlock(chunk, key, testMat, keyMat)
+        pos += 24
+    }
+
+    ; 2. 복원된 Base64 문자열을 디코딩하여 원본 평문으로 변환
+    return B64_to_Str(decryptedB64)
+}
+
+; (기존 Decrypt 함수 이름을 DecryptBlock으로 변경)
+DecryptBlock(encryptedText, key, testMat := "", keyMat := "") {
     state := B64_to_HexMat(encryptedText)
     chipherKey := Matrix(key).inverse()   ;행렬변환 패딩포함
 
@@ -141,17 +180,17 @@ Decrypt(encryptedText, key, testMat := "", keyMat := "") {
     if keyMat != ""
         chipherkey := keyMat
 
-    state := addRound(state, chipherKey, 10)                ; Addroundkey
-    rShiftstate := InvShiftRows(state)                      ; rowShifts
-    sBoxState := InvSubBytes(rShiftstate)                   ; s-box 변환
+    state := addRound(state, chipherKey, 10)                ;Addroundkey
+    rShiftstate := InvShiftRows(state)                      ;rowShifts
+    sBoxState := InvSubBytes(rShiftstate)                   ;s-box 변환
 
     loop 9 {
-        state := addRound(sBoxState, chipherKey, 10 - A_Index)   ; Addroundkey
-        mixCstate := InvMixColumns(state)                ; mixColumns
-        rShiftstate := InvShiftRows(mixCstate)                 ; rowShifts
-        sBoxState := InvSubBytes(rShiftstate)                        ; s-box 변환
+        state := addRound(sBoxState, chipherKey, 10 - A_Index)   ;Addroundkey
+        mixCstate := InvMixColumns(state)                ;mixColumns
+        rShiftstate := InvShiftRows(mixCstate)                 ;rowShifts
+        sBoxState := InvSubBytes(rShiftstate)                        ;s-box 변환
     }
-    state := addRound(sBoxState, chipherKey, 0)                 ; Addroundkey
+    state := addRound(sBoxState, chipherKey, 0)                 ;Addroundkey
 
     return unMatrix(state, true)
 }
@@ -493,7 +532,7 @@ HexMat_to_B64(mat) {
         }
     }
     base64 .= SubStr(B64table, pre + 1, 1) "=="
-    A_Clipboard := base64 ; Side effect in original, maybe remove?
+
     return base64
 }
 
@@ -524,4 +563,31 @@ B64_to_HexMat(base64) {
     out.inverse()
 
     return out
+}
+
+; =================================================================
+; 내부 유틸리티: Base64 인코딩 / 디코딩 (Windows API 사용)
+; =================================================================
+Str_to_B64(str) {
+    if (str == "")
+        return ""
+    buf := Buffer(StrPut(str, "UTF-8"))
+    StrPut(str, buf, "UTF-8")
+    Flags := 0x40000001 ; CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF
+    size := 0
+    DllCall("Crypt32.dll\CryptBinaryToString", "Ptr", buf, "UInt", buf.Size - 1, "UInt", Flags, "Ptr", 0, "UIntP", &size)
+    out := Buffer(size * 2)
+    DllCall("Crypt32.dll\CryptBinaryToString", "Ptr", buf, "UInt", buf.Size - 1, "UInt", Flags, "Ptr", out, "UIntP", &size)
+    return StrGet(out, "UTF-16")
+}
+
+B64_to_Str(b64) {
+    if (b64 == "")
+        return ""
+    Flags := 1 ; CRYPT_STRING_BASE64
+    size := 0
+    DllCall("Crypt32.dll\CryptStringToBinary", "Str", b64, "UInt", 0, "UInt", Flags, "Ptr", 0, "UIntP", &size, "Ptr", 0, "Ptr", 0)
+    out := Buffer(size)
+    DllCall("Crypt32.dll\CryptStringToBinary", "Str", b64, "UInt", 0, "UInt", Flags, "Ptr", out, "UIntP", &size, "Ptr", 0, "Ptr", 0)
+    return StrGet(out, "UTF-8")
 }

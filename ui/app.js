@@ -8,6 +8,8 @@ let isWorkLogInitialized = false; // Flag for persistence
 let pendingRestoreState = null; // State waiting for config load
 let currentSafetyEduData = {}; // [New] Store for Safety Edu Presets
 let guntaeData = null; // 근태 조회 결과 캐시
+let configReadyUserId = null;
+let pendingAutoWorkerList = null;
 
 // --- Firestore Realtime FormList ---
 const ERP_FIREBASE_CONFIG = Object.freeze({
@@ -288,6 +290,7 @@ function handleAhkMessage(msg) {
             break;
         case 'loadConfig':
             appConfig = msg.data;
+            configReadyUserId = selectedUserId;
             initPresets(); // Initialize Presets for Track/Vehicle Views
             if (document.getElementById('settings-view').style.display !== 'none') {
                 loadSettingsToUI();
@@ -308,6 +311,7 @@ function handleAhkMessage(msg) {
                 restoreUiStateData(pendingRestoreState);
                 pendingRestoreState = null;
             }
+            processPendingAutoWorkerList();
             break;
         case 'releaseNotes':
             if (msg.error) {
@@ -353,8 +357,12 @@ function handleAhkMessage(msg) {
             applyGuntaeData(msg.data);
             break;
         case 'updateWorkerList':
-            // 작업자 명단 수신 처리
-            handleWorkerListUpdate(msg.data);
+            if (msg.automatic) {
+                pendingAutoWorkerList = msg;
+                processPendingAutoWorkerList();
+            } else {
+                handleWorkerListUpdate(msg.data);
+            }
             break;
         case 'updateLocationList':
             // 점검장소 불어오기 수신 처리
@@ -916,6 +924,8 @@ function tryLogin() {
 }
 
 function handleLoginSuccess(profile) {
+    configReadyUserId = null;
+    if (pendingAutoWorkerList?.employeeId !== profile.id) pendingAutoWorkerList = null;
     switchView('app');
     const titleEl = document.getElementById('app-title');
     if (titleEl) titleEl.innerText = `통합자동화 - ${profile.name}`;
@@ -1527,13 +1537,13 @@ function requestNativeConfirmation(text, title = '확인', question = '위 내�
     });
 }
 
-function requestWorkerDeletionConfirmation(text) {
+function requestWorkerImportConfirmation(text, title = '작업자 불러오기 확인') {
     const requestId = (window.crypto && typeof window.crypto.randomUUID === 'function')
         ? window.crypto.randomUUID()
         : `${Date.now()}-${Math.random()}`;
     return new Promise(resolve => {
         pendingNativeConfirmations.set(requestId, resolve);
-        sendMessageToAHK({ command: 'confirmWorkerDeletion', requestId, text });
+        sendMessageToAHK({ command: 'confirmWorkerImport', requestId, text, title });
     });
 }
 
@@ -3814,8 +3824,57 @@ function importLocationsFromHeadless() {
     }, 10000);
 }
 
+function hasImportedWorkerChanges(newWorkers) {
+    if (!Array.isArray(newWorkers) || newWorkers.length === 0) return false;
+    const current = appConfig.appSettings?.colleagues || [];
+    const incoming = new Map(newWorkers.map(worker => [String(worker['사번'] || '').trim(), worker])
+        .filter(([id]) => id));
+    if (incoming.size === 0) return false;
+
+    const currentIds = new Set(current.map(worker => String(worker.id || '').trim()));
+    if (current.length !== incoming.size || currentIds.size !== incoming.size) return true;
+    const managerId = Array.from(incoming).find(([, worker]) =>
+        String(worker['직책'] || '').trim() === '분소장')?.[0];
+
+    return current.some(worker => {
+        const id = String(worker.id || '').trim();
+        const imported = incoming.get(id);
+        if (!imported) return true;
+        const name = String(imported['이름'] || '').trim();
+        const team = String(imported['근무조'] || '').trim();
+        const phone = String(imported['전화번호'] || '').replace(/\D/g, '');
+        const currentPhone = String(worker.phone || '').replace(/\D/g, '');
+        const currentManager = worker.isManager === true || worker.isManager === 1
+            || worker.isManager === '1';
+        return (name && name !== String(worker.name || '').trim())
+            || (['A조', 'B조', 'C조', 'D조', '일근'].includes(team) && team !== worker.team)
+            || (/^01\d{8,9}$/.test(phone) && phone !== currentPhone)
+            || currentManager !== (id === managerId);
+    });
+}
+
+async function processPendingAutoWorkerList() {
+    const pending = pendingAutoWorkerList;
+    if (!pending || !selectedUserId || configReadyUserId !== selectedUserId) return;
+    pendingAutoWorkerList = null;
+    if (pending.employeeId !== selectedUserId || !hasImportedWorkerChanges(pending.data)) return;
+
+    const moveToSettings = await requestWorkerImportConfirmation(
+        '작업자 정보 변경사항이 감지되었습니다.\n작업자 설정으로 이동하시겠습니까?',
+        '작업자 설정 이동 확인'
+    );
+    if (!moveToSettings || selectedUserId !== pending.employeeId
+        || configReadyUserId !== pending.employeeId
+        || !hasImportedWorkerChanges(pending.data)) return;
+
+    if (document.getElementById('settings-view').style.display === 'none')
+        switchView('settings');
+    switchSettingsTab('tab-worker');
+    handleWorkerListUpdate(pending.data, true);
+}
+
 // 수신된 작업자 명단 처리
-async function handleWorkerListUpdate(newWorkers) {
+async function handleWorkerListUpdate(newWorkers, silentIfUnchanged = false) {
     if (!Array.isArray(newWorkers) || newWorkers.length === 0) return;
 
     const tbody = document.querySelector('#worker-table tbody');
@@ -3828,91 +3887,104 @@ async function handleWorkerListUpdate(newWorkers) {
         }
     });
 
-    const incomingIds = new Set(newWorkers.map(w => String(w['사번'] || '').trim()).filter(Boolean));
-    if (incomingIds.size === 0) return;
+    const incoming = new Map();
+    newWorkers.forEach(w => {
+        const id = String(w['사번'] || '').trim();
+        if (!id) return;
+        const rawPhone = String(w['전화번호'] || '').replace(/\D/g, '');
+        const phone = /^01\d{8,9}$/.test(rawPhone)
+            ? rawPhone.replace(rawPhone.length === 11
+                ? /^(\d{3})(\d{4})(\d{4})$/
+                : /^(\d{3})(\d{3})(\d{4})$/, '$1-$2-$3')
+            : '';
+        incoming.set(id, {
+            id,
+            name: String(w['이름'] || '').trim(),
+            team: String(w['근무조'] || '').trim(),
+            phone,
+            isManager: String(w['직책'] || '').trim() === '분소장'
+        });
+    });
+    if (incoming.size === 0) return;
+    const managerId = Array.from(incoming.values()).find(worker => worker.isManager)?.id;
+    incoming.forEach(worker => { worker.isManager = worker.id === managerId; });
+
     const missingRows = existingTableRows.filter(row => {
         const id = row.querySelector('input[placeholder="사번"]')?.value.trim() || '';
-        return !incomingIds.has(id);
+        return !incoming.has(id);
     });
-    let deleteConfirmed = false;
-    if (missingRows.length > 0) {
-        const list = missingRows.map(row => {
-            const name = row.querySelector('input[placeholder="이름"]')?.value.trim() || '(이름 없음)';
-            const id = row.querySelector('input[placeholder="사번"]')?.value.trim() || '사번 없음';
-            return `• ${name} (${id})`;
-        }).join('\n');
-        deleteConfirmed = await requestWorkerDeletionConfirmation(
-            `조회되지 않은 작업자 ${missingRows.length}명:\n\n${list}\n\n확인을 누르면 위 작업자를 목록에서 삭제합니다.`
-        );
-    }
-
-    let addedCount = 0;
-    let updatedCount = 0;
-    let managerRow = null;
-
-    newWorkers.forEach(w => {
-        const id = String(w["사번"] || '').trim();
-        const name = w["이름"];
-        const team = w["근무조"];
-        const isManager = String(w["직책"] || '').trim() === '분소장';
-        const rawPhone = String(w["전화번호"] || '').replace(/\D/g, '');
-        const phone = /^01\d{9}$/.test(rawPhone)
-            ? rawPhone.replace(/^(\d{3})(\d{4})(\d{4})$/, '$1-$2-$3')
-            : '';
-        // const vacation = w["휴가종류"]; // 비고란엔 넣지 않음 (요청사항 없음, 필요 시 추가)
-
-        if (id && existingRows.has(id)) {
-            const row = existingRows.get(id);
-            const nameInput = row.querySelector('input[placeholder="이름"]');
-            const phoneInput = row.querySelector('input[placeholder="   -    -    "]');
-            // Repair names corrupted by the previous WinHTTP decoding path.
-            if (nameInput && !/[가-힣]/.test(nameInput.value)
-                && /[ìëêí]/.test(nameInput.value) && /[가-힣]/.test(name)) {
-                nameInput.value = name;
-                updatedCount++;
-            }
-            if (phoneInput && !phoneInput.value && phone) {
-                phoneInput.value = phone;
-                updatedCount++;
-            }
-            if (isManager) managerRow = row;
-        } else if (id) {
-            // 새 작업자 추가
-            addWorkerRowToTable(tbody, {
-                name: name,
-                id: id,
-                team: team,
-                phone: phone,
-                isManager: isManager ? 1 : 0,
-                driverRole: '-'
-            });
-            if (isManager) managerRow = tbody.lastElementChild;
-            addedCount++;
+    const updates = [];
+    const additions = [];
+    incoming.forEach(worker => {
+        const row = existingRows.get(worker.id);
+        if (!row) {
+            additions.push(worker);
+            return;
         }
+
+        const nameInput = row.querySelector('input[placeholder="이름"]');
+        const teamSelect = row.querySelector('select:first-of-type');
+        const phoneInput = row.querySelector('input[placeholder="   -    -    "]');
+        const managerCheckbox = row.querySelector('input[type="checkbox"]');
+        const changes = [];
+        if (nameInput && worker.name && nameInput.value.trim() !== worker.name)
+            changes.push({ input: nameInput, value: worker.name, label: '이름', before: nameInput.value.trim() });
+        if (teamSelect && ['A조', 'B조', 'C조', 'D조', '일근'].includes(worker.team)
+            && teamSelect.value !== worker.team)
+            changes.push({ input: teamSelect, value: worker.team, label: '근무조', before: teamSelect.value });
+        if (phoneInput && worker.phone && phoneInput.value.replace(/\D/g, '') !== worker.phone.replace(/\D/g, ''))
+            changes.push({ input: phoneInput, value: worker.phone, label: '전화번호', before: phoneInput.value.trim() });
+        if (managerCheckbox && managerCheckbox.checked !== worker.isManager)
+            changes.push({ input: managerCheckbox, value: worker.isManager, label: '분소장',
+                before: managerCheckbox.checked ? '체크' : '해제' });
+        if (changes.length) updates.push({ worker, changes });
     });
 
-    if (managerRow) {
-        tbody.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
-            const shouldCheck = checkbox.closest('tr') === managerRow;
-            if (checkbox.checked !== shouldCheck) {
-                checkbox.checked = shouldCheck;
-                updatedCount++;
-            }
-        });
+    if (updates.length || missingRows.length) {
+        const sections = [];
+        if (updates.length) {
+            sections.push('[기존 작업자 변경]\n' + updates.map(({ worker, changes }) =>
+                `• ${worker.name} (${worker.id})\n` + changes.map(change =>
+                    `  ${change.label}: ${change.before || '(없음)'} → ${change.label === '분소장'
+                        ? (change.value ? '체크' : '해제') : change.value}`).join('\n')
+            ).join('\n'));
+        }
+        if (additions.length)
+            sections.push('[추가]\n' + additions.map(w => `• ${w.name} (${w.id})`).join('\n'));
+        if (missingRows.length) {
+            sections.push('[삭제]\n' + missingRows.map(row => {
+                const name = row.querySelector('input[placeholder="이름"]')?.value.trim() || '(이름 없음)';
+                const id = row.querySelector('input[placeholder="사번"]')?.value.trim() || '사번 없음';
+                return `• ${name} (${id})`;
+            }).join('\n'));
+        }
+        const confirmed = await requestWorkerImportConfirmation(
+            `작업자 목록을 다음과 같이 변경합니다.\n\n${sections.join('\n\n')}\n\n확인을 누르면 적용합니다.`
+        );
+        if (!confirmed) {
+            const btn = document.getElementById('btn-import-workers');
+            if (btn) btn.disabled = false;
+            return;
+        }
     }
 
-    if (deleteConfirmed) missingRows.forEach(row => row.remove());
+    updates.forEach(({ changes }) => changes.forEach(change => {
+        if (change.label === '분소장') change.input.checked = change.value;
+        else change.input.value = change.value;
+    }));
+    additions.forEach(worker => addWorkerRowToTable(tbody, {
+        ...worker, isManager: worker.isManager ? 1 : 0, driverRole: '-'
+    }));
+    missingRows.forEach(row => row.remove());
 
-    if (addedCount > 0 || updatedCount > 0 || (deleteConfirmed && missingRows.length > 0)) {
+    if (updates.length || additions.length || missingRows.length) {
         autoSaveSettings(); // 데이터 변경 저장
 
         // Auto scroll
         const contentArea = document.querySelector('.settings-content-area');
         if (contentArea) contentArea.scrollTop = contentArea.scrollHeight;
-    } else {
-        showNativeMsgBox(missingRows.length > 0 && !deleteConfirmed
-            ? "작업자 삭제를 취소했습니다."
-            : "변경할 분소원 정보가 없습니다.");
+    } else if (!silentIfUnchanged) {
+        showNativeMsgBox("변경할 분소원 정보가 없습니다.");
     }
 
     const btn = document.getElementById('btn-import-workers');

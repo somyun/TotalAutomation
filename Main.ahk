@@ -47,14 +47,14 @@ SetTitleMatchMode 2
 ; ==============================================================================
 ; 컴파일러 지시문
 ; ==============================================================================
-;@Ahk2Exe-SetVersion 3.5.6.0
-;@Ahk2Exe-SetProductVersion v3.5.6
+;@Ahk2Exe-SetVersion 3.5.7.0
+;@Ahk2Exe-SetProductVersion v3.5.7
 ;@Ahk2Exe-SetDescription 통합자동화
 ; ==============================================================================
 ; ==============================================================================
 ; 초기화
 ; ==============================================================================
-global AppVersion := "v3.5.6"
+global AppVersion := "v3.5.7"
 global wvc := ""
 global wv := ""
 global MainGui := ""
@@ -227,7 +227,7 @@ PerformReadySequence() {
                 ; 저장 CookieJar 검증 또는 통합 세션 재획득은 백그라운드에서 수행한다.
                 if (profile.Has("webPW") && profile.Has("pw2")
                     && profile["webPW"] != "" && profile["pw2"] != "")
-                    SessionManager.AcquireAsync(profile)
+                    SessionManager.AcquireAsync(profile, AutoImportWorkersOnLogin)
 
                 ; 작업보고.sap 파일 갱신 (자동 로그인)
                 UpdateSapFile(savedID)
@@ -485,7 +485,7 @@ OnWebMessage(sender, args) {
                 sessionUser := profile.Clone()
                 sessionUser["webPW"] := runWebPW
                 sessionUser["pw2"] := runPW2
-                SessionManager.AcquireAsync(sessionUser)
+                SessionManager.AcquireAsync(sessionUser, AutoImportWorkersOnLogin)
             } else {
                 LogDebug("통합 세션 획득 생략: 비밀번호(webPW, pw2) 정보 부족")
             }
@@ -527,10 +527,11 @@ OnWebMessage(sender, args) {
         requestId := msg.Has("requestId") ? msg["requestId"] : ""
         question := msg.Has("question") ? msg["question"] : "위 내용으로 클라우드에 내보내기 하시겠습니까?"
         ShowSettingsConfirmationWindow(text, title, requestId, question)
-    } else if (command == "confirmWorkerDeletion") {
+    } else if (command == "confirmWorkerImport") {
         text := msg.Has("text") ? msg["text"] : ""
+        title := msg.Has("title") ? msg["title"] : "작업자 불러오기 확인"
         requestId := msg.Has("requestId") ? msg["requestId"] : ""
-        confirmed := MsgBox(text, "작업자 삭제 확인", "OKCancel Icon!") == "OK"
+        confirmed := MsgBox(text, title, "OKCancel Icon!") == "OK"
         if (requestId != "") {
             payload := Map("type", "confirmMsgboxResult", "requestId", requestId, "confirmed", confirmed)
             wv.PostWebMessageAsJson(JSON.stringify(payload))
@@ -683,31 +684,8 @@ OnWebMessage(sender, args) {
     ; --- 7-2. 작업자 명단 불러오기 (Headless) ---
     else if (command == "importWorkers") {
         LogDebug("작업자 명단 불러오기 요청 수신")
-        try {
-            LogDebug("Headless 연결 시도 (Attach Mode)...")
-            headless := HeadlessAutomation(true, LogDebug)
-
-            arbpl := msg.Has("arbpl") ? msg["arbpl"] : "5129"
-            LogDebug("작업장 코드: " arbpl)
-
-            workers := headless.GetWorkerList(arbpl)
-            LogDebug("작업자 명단 조회 완료. 개수: " workers.Length)
-
-            if (workers.Length > 0) {
-                payload := Map("type", "updateWorkerList", "data", workers)
-                wv.PostWebMessageAsJson(JSON.stringify(payload))
-                LogDebug("작업자 명단 불러오기 성공: " workers.Length "명")
-                MsgBox(workers.Length "명의 작업자 정보를 불러왔습니다.", "성공")
-            } else {
-                LogDebug("작업자 명단이 비어있음")
-                LogDebug("[오류] 불러올 작업자가 없거나 조회에 실패 (MsgBox 표시)")
-                MsgBox("불러올 작업자가 없거나 조회에 실패했습니다.")
-            }
-        } catch as e {
-            LogDebug("Headless 오류 (importWorkers): " e.Message)
-            LogDebug("[오류] 작업자 조회 실패 (MsgBox 표시): " e.Message)
-            MsgBox("조회 실패: " e.Message)
-        }
+        arbpl := msg.Has("arbpl") ? msg["arbpl"] : "5129"
+        ImportWorkersAndNotify(arbpl)
     }
     ; --- 7-3. 점검장소 불러오기 (Headless) ---
     else if (command == "importLocations") {
@@ -1248,6 +1226,49 @@ AutoRefreshERPOrder() {
         LogDebug("[AutoRefresh] 오류: " e.Message)
         if SessionManager.IsExpiredError(e)
             SessionManager.Reacquire()
+    }
+}
+
+; ------------------------------------------------------------------------------
+; 로그인 세션 확보 후 작업자 명단 1회 조회
+; ------------------------------------------------------------------------------
+AutoImportWorkersOnLogin(session) {
+    employeeId := session.EmployeeId
+    if (ConfigManager.GetCurrentUserID() != employeeId)
+        return
+
+    userRoot := ConfigManager.GetUserRoot(employeeId)
+    profile := userRoot.Has("profile") ? userRoot["profile"] : Map()
+    arbpl := profile.Has("arbpl") ? profile["arbpl"] : ""
+    if (arbpl == "") {
+        LogDebug("[작업자] 분소 코드가 없어 로그인 후 자동 조회를 건너뜀")
+        return
+    }
+
+    ; 세션 준비 콜백이 끝난 뒤 조회한다.
+    SetTimer(() => ImportWorkersAndNotify(arbpl, true, employeeId), -1)
+}
+
+ImportWorkersAndNotify(arbpl, automatic := false, employeeId := "") {
+    global wv
+
+    if (automatic && (!SessionManager.IsReady(employeeId)
+        || ConfigManager.GetCurrentUserID() != employeeId))
+        return
+
+    try {
+        headless := HeadlessAutomation(true, LogDebug)
+        workers := headless.GetWorkerList(arbpl)
+        if (workers.Length = 0)
+            throw Error("불러올 작업자가 없거나 조회에 실패했습니다.")
+
+        payload := Map("type", "updateWorkerList", "data", workers,
+            "automatic", automatic, "employeeId", employeeId)
+        wv.PostWebMessageAsJson(JSON.stringify(payload))
+        LogDebug("작업자 명단 불러오기 성공: " workers.Length "명")
+    } catch as e {
+        LogDebug("[오류] 작업자 조회 실패: " e.Message)
+        MsgBox("작업자 조회 실패: " e.Message, "작업자 불러오기 오류", "Iconx")
     }
 }
 

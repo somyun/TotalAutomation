@@ -293,6 +293,11 @@ class ERP점검 {
         chk2 := true
         chk3 := true
 
+        ; 이미 실행 중인 SAP가 존재하면 창이름 저장
+        existingSapWindows := Map()
+        for hwnd in WinGetList("ahk_class SAP_FRONTEND_SESSION")
+            existingSapWindows[hwnd] := WinGetTitle("ahk_id " hwnd)
+
         ; SAP 실행 (이미 실행 중이면 활성화됨)
         try {
             Run("작업보고.sap")
@@ -338,12 +343,29 @@ class ERP점검 {
                 chk3 := false
             }
 
-            ; 4. 오더번호 입력 창 진입 확인
-            if WinExist("작업완료보고 ahk_class SAP_FRONTEND_SESSION") {
-                WinActivate
+            ; 4. 오더번호 입력 창 확인
+            targetHwnd := 0
+
+            for hwnd in WinGetList("작업완료보고 ahk_class SAP_FRONTEND_SESSION") {
+                currentTitle := WinGetTitle("ahk_id " hwnd)
+
+                if (!existingSapWindows.Has(hwnd)
+                    || existingSapWindows[hwnd] != currentTitle) {
+                    if targetHwnd {
+                        MsgBox("이번 실행의 작업완료보고 창을 하나로 특정할 수 없습니다.", "오류", "iconx")
+                        return false
+                    }
+                    targetHwnd := hwnd
+                }
+            }
+
+            if targetHwnd {
+                sapWindow := "ahk_id " targetHwnd
+                WinActivate(sapWindow)
                 Sleep 750
-                if (WinGetMinMax("작업완료보고 ahk_class SAP_FRONTEND_SESSION") != 1) {
-                    WinMaximize
+
+                if (WinGetMinMax(sapWindow) != 1) {
+                    WinMaximize(sapWindow)
                     Sleep 500
                 }
 
@@ -354,7 +376,67 @@ class ERP점검 {
                     return false
                 }
 
-                Send orderNum . "{Enter}"
+                sapSecurityKey := "HKEY_CURRENT_USER\Software\SAP\SAPGUI Front\SAP Frontend Server\Security"
+
+                try {
+                    if (RegRead(sapSecurityKey, "WarnOnAttach", 1) != 0)
+                        RegWrite(0, "REG_DWORD", sapSecurityKey, "WarnOnAttach")
+                } catch as e {
+                    MsgBox("SAP 스크립트 접근 알림 설정을 변경하지 못했습니다.`n" e.Message, "오류", "iconx")
+                    return false
+                }
+
+                ; 스크립팅 객체에 연결
+                sapRot := ComObject("SapROTWr.SapROTWrapper")
+
+                ; 스크립팅 시작
+                stage := "GetROTEntry"
+                try {
+                    sapAuto := sapRot.GetROTEntry("SAPGUI")
+
+                    stage := "GetScriptingEngine"
+                    sapApp := sapAuto.GetScriptingEngine()
+
+                    ;다중 세션 환경에서 실제 열린 세션에 연결
+                    sapSession := ""
+                    Loop sapApp.Children.Count {
+                        sapConnection := sapApp.Children.ElementAt(A_Index - 1)
+
+                        Loop sapConnection.Children.Count {
+                            candidate := sapConnection.Children.ElementAt(A_Index - 1)
+
+                            try {
+                                candidateHwnd := candidate.FindById("wnd[0]").Handle
+
+                                ; SAP Handle은 32비트 Long이므로 하위 32비트끼리 비교
+                                if ((candidateHwnd & 0xFFFFFFFF) = (targetHwnd & 0xFFFFFFFF)) {
+                                    sapSession := candidate
+                                    break
+                                }
+                            } catch {
+                                ; 접근할 수 없는 세션은 건너뜀
+                            }
+                        }
+
+                        if IsObject(sapSession)
+                            break
+                    }
+
+                    if !IsObject(sapSession) {
+                        MsgBox("작업완료보고 창에 해당하는 SAP 세션을 찾지 못했습니다.", "오류", "iconx")
+                        return false
+                    }
+
+                    stage := "오더번호 입력"
+                    sapSession.FindById("wnd[0]/usr/ctxtGS_0100-AUFNR").Text := String(orderNum)
+
+                    stage := "Enter 입력"
+                    sapSession.FindById("wnd[0]").SendVKey(0)
+                } catch as e {
+                    MsgBox("실패 단계: " stage "`n코드 행: " e.Line "`n오류: " e.Message,
+                        "SAP 스크립팅 오류", "iconx")
+                    return false
+                }
                 break ; 루프 탈출 -> 다음 단계
             }
 
@@ -364,28 +446,56 @@ class ERP점검 {
             }
         }
 
-        {	;작업보고 대기
-            sleep 250
-            CoordMode "Pixel", "Screen"
+
+        ;작업보고 대기
+        /*
+        sleep 250
+        CoordMode "Pixel", "Screen"
+        GetCaretPos(&cx, &cy, &cw, &ch)
+        nowColor := PixelGetColor(cx + 5, cy + 5)
+        while nowColor != 0xDFEBF5 {
+            WinActivate("작업완료보고")
+            sleep 100
+            send "{end}"
+            if A_Index > 30 {
+                MsgBox("타임아웃 - 작업보고 진입실패`n프로그램이 종료됩니다" getPos, "오류", "iconx")
+                ExitApp
+            }
+            sleep 150
             GetCaretPos(&cx, &cy, &cw, &ch)
             nowColor := PixelGetColor(cx + 5, cy + 5)
-            while nowColor != 0xDFEBF5 {
-                WinActivate("작업완료보고")
-                sleep 100
-                send "{end}"
-                if A_Index > 30 {
-                    MsgBox("타임아웃 - 작업보고 진입실패`n프로그램이 종료됩니다" getPos, "오류", "iconx")
-                    ExitApp
+            getPos := "`n좌표 " cx ", " cy " => 색상 : " PixelGetColor(cx + 5, cy + 5)
+        }
+        CoordMode "Pixel", "Client"
+        sleep 500
+
+        */
+
+        ; 작업자 입력칸 대기
+        workerId := "wnd[0]/usr/subSUB_CON:SAPMZPM2418:0110/tabsTS_0110/tabpTAB1/ssubSUB_CON01:SAPMZPM2418:0111/tblSAPMZPM2418TC_0101/txtGT_AFRUD-LTXA1[10,0]"
+        reportReady := false
+
+        Loop 60 {  ; 최대 약 15초
+            try {
+                if !sapSession.Busy {
+                    workerField := sapSession.FindById(workerId)
+                    reportReady := true
+                    break
                 }
-                sleep 150
-                GetCaretPos(&cx, &cy, &cw, &ch)
-                nowColor := PixelGetColor(cx + 5, cy + 5)
-                getPos := "`n좌표 " cx ", " cy " => 색상 : " PixelGetColor(cx + 5, cy + 5)
+            } catch {
+                ; 화면 전환 중에는 아직 객체가 없을 수 있음
             }
-            CoordMode "Pixel", "Client"
-            sleep 500
+            Sleep 250
         }
 
+        if !reportReady {
+            MsgBox("시간초과 - " ss " 작업보고 진입 확인에 실패했습니다.", "오류", "iconx")
+            return false
+        }
+
+        workerField.Text := member
+
+        /*
         ; 입력 시작
         Send "{Tab 16}"
         Sleep 250
@@ -394,13 +504,31 @@ class ERP점검 {
         Send "^v" ; 작업자 붙여넣기
         Sleep 500
 
+        */
+
         ; 변전소인 경우 측정값 입력 진행
         if (targetType == "변전소") {
+            /*
             ; 측정값 입력 (Shift+Tab으로 이동 후 입력)
             Send "{Shift down}{Tab 14}{Shift up}{Right 2}{Enter}"
             Sleep 500
             Send "{Tab 5}{Enter}" ; 업로드 버튼
             Sleep 500
+            */
+
+            ;측정값 입력 탭
+            tab4Id := "wnd[0]/usr/subSUB_CON:SAPMZPM2418:0110/tabsTS_0110/tabpTAB4"
+            ;엑셀 업로드 버튼
+            uploadButtonId := tab4Id "/ssubSUB_CON01:SAPMZPM2418:0114/btn%#AUTOTEXT018"
+
+            try {
+                sapSession.FindById(tab4Id).Select()
+                sapSession.FindById(uploadButtonId).SetFocus()
+                Send "{Enter}" ; 업로드 버튼
+            } catch as e {
+                MsgBox("측정값 업로드 버튼 실행 실패:`n" e.Message, "오류", "iconx")
+                return false
+            }
 
             ; 파일 선택 창 대기
             if WinWait("열기 ahk_exe saplogon.exe", , 15) {
@@ -440,6 +568,7 @@ class ERP점검 {
             }
 
             ;입력확인
+            /*
             sleep 250
             CoordMode "Pixel", "Screen"
             while !GetCaretPos(&cx, &cy, &cw, &ch) || PixelGetColor(cx + 5, cy + 5) != 0xFEF09E {
@@ -470,6 +599,37 @@ class ERP점검 {
 
             }
             CoordMode "Pixel", "Client"
+            */
+
+            measureId := "wnd[0]/usr/subSUB_CON:SAPMZPM2418:0110/tabsTS_0110/tabpTAB4/ssubSUB_CON01:SAPMZPM2418:0114/tblSAPMZPM2418TC_0104/txtGT_IMPTT-RDCNT[5,0]"
+            valueLoaded := false
+            deadline := A_TickCount + 15000  ; 15초제한
+
+            while (A_TickCount < deadline) {
+                try {
+
+                    if !sapSession.Busy {
+                        measuredValue := Trim(sapSession.FindById(measureId).Text)
+                        if (measuredValue != "") {
+                            valueLoaded := true
+                            break
+                        }
+                    }
+
+                    if (A_TickCount >= deadline)
+                        break
+
+                } catch {
+                    ; 화면 전환 중 객체가 아직 없을 수 있음
+                }
+
+                Sleep 250
+            }
+
+            if !valueLoaded {
+                MsgBox("시간초과 - 측정값 입력을 확인하지 못했습니다.", "오류", "iconx")
+                return false
+            }
         }
 
         if !batchMode

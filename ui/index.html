@@ -409,7 +409,7 @@
                                                         style="color: #00C853; margin-right: 5px; font-weight: bold;">&#10004;&#xFE0E;</span>
                                                     {{ loc.name }}
                                                     <span
-                                                        v-if="loc.type === '변전소' && latestStatusMap[loc.name] !== undefined"
+                                                        v-if="loc.type === '변전소' && latestStatusMap !== null"
                                                         class="status-dot"
                                                         :style="{ color: latestStatusMap[loc.name] ? '#4CAF50' : '#FF0000' }"
                                                         style="font-size: 1.2em; margin-left: 5px; font-weight: bold;"

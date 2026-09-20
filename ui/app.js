@@ -2038,8 +2038,13 @@ function handleERPStatusUpdate(statusMap) {
 
 window.handleERPStatusUpdate = handleERPStatusUpdate;
 
+let latestERPOrders = null;
+
 function handleERPOrderListUpdate(orders) {
     if (!orders || !Array.isArray(orders)) return;
+
+    // The order list may arrive before the batch-mode Vue app is mounted.
+    latestERPOrders = [...orders];
 
     // 1. Update Timestamp
     const now = new Date();
@@ -2078,7 +2083,7 @@ function handleERPOrderListUpdate(orders) {
     // 4차 요구사항(일괄모드 연동)
     if (erpBatchAppInstance && typeof erpBatchAppInstance.completedOrders !== 'undefined') {
         // Vue3 배열 반응성을 위해 새로운 배열 인스턴스 할당
-        erpBatchAppInstance.completedOrders = orders ? [...orders] : [];
+        erpBatchAppInstance.completedOrders = [...latestERPOrders];
     }
 }
 
@@ -2131,7 +2136,7 @@ function initERPBatchApp() {
                 workers: [],
                 activeRows: [], // Array of location names
                 selections: {},  // { locName: [workerId1, workerId2, ...] }
-                latestStatusMap: {},
+                latestStatusMap: null,
                 completedOrders: []
             };
         },
@@ -2174,9 +2179,12 @@ function initERPBatchApp() {
                     this.workers = sortedWorkers.map(w => ({ id: w.id, name: w.name }));
                 }
 
-                // [버그 수정] 인스턴스 초기화 시, 이미 캐싱된 ERP 신호등 데이터(latestERPStatus)를 불러와 Vue 인스턴스에 주입
-                if (typeof latestERPStatus !== 'undefined' && latestERPStatus) {
+                // Restore results received before this Vue app was mounted.
+                if (latestERPStatus !== null) {
                     this.latestStatusMap = { ...latestERPStatus };
+                }
+                if (latestERPOrders !== null) {
+                    this.completedOrders = [...latestERPOrders];
                 }
             },
             isRowActive(locName) {

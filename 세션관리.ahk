@@ -93,7 +93,9 @@ class SessionManager {
                         LogDebug("세션 준비 후 작업 실행 오류: " err.Message)
                 }
 
+                ; 작업자 자동 조회보다 근태 조회를 먼저 끝내 업무일지 상태가 누락되지 않게 한다.
                 try RequestGuntaeData()
+                try RunPendingAutoImportWorkers(session)
                 try SetTimer AutoRefreshERPOrder, 3600000
             } catch as err {
                 this.Fail(err.Message)

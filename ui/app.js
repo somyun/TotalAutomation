@@ -114,6 +114,10 @@ function startERPFormListRealtime() {
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
+    initERPIndividualApp();
+    initERPWorkerModalApp();
+    initTrackAccessApp();
+
     // Initial Nav Setup
     switchMainTab('view-work-log');
 
@@ -166,13 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // [New] Auto-formatting for Time and Phone inputs
-    const phoneInputs = ['ta-driver-phone', 'ta-worker-phone', 'ta-safety-phone'];
-    const timeInputs = ['ta-work-start', 'ta-work-end', 'ta-op-start', 'ta-op-end', 'vl-start-time', 'vl-end-time'];
-
-    phoneInputs.forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.addEventListener('input', (e) => formatPhone(e.target));
-    });
+    const timeInputs = ['vl-start-time', 'vl-end-time'];
 
     timeInputs.forEach(id => {
         const el = document.getElementById(id);
@@ -370,16 +368,16 @@ function handleAhkMessage(msg) {
             break;
         case 'updateAgreementNo':
             if (msg.value) {
-                setVal('ta-agreement-no', msg.value);
+                trackAccessState.form.agreementNo = msg.value;
                 // 현재 선택된 프리셋에 자동 저장
-                const sel = document.getElementById('track-preset-sel');
-                const presetKey = sel ? sel.value : '';
+                const presetKey = trackAccessState.selectedPreset;
                 if (presetKey && presetKey !== '__NEW__') {
                     const presets = getUserPresets('track');
                     if (presets[presetKey]) {
                         presets[presetKey].agreementNo = msg.value;
                         presets[presetKey].agreementNoDate = new Date().toISOString().slice(0, 10);
                         saveUserPresets('track', presets);
+                        syncTrackPresets();
                     }
                 }
             }
@@ -540,12 +538,16 @@ function collectUiState() {
         }
     });
 
+    // Vue가 관리하는 화면은 DOM이 아니라 반응형 원본 상태를 직접 저장합니다.
+    state.customState.erpCheck = collectERPRecoveryState();
+    state.customState.trackAccess = collectTrackAccessRecoveryState();
+
     return state;
 }
 
 function getSavableValue(el, key) {
     if (key === 'erpLocation') {
-        return selectedERPLocation;
+        return erpState.selectedLocation;
     }
     // Future extensions:
     // if (key === 'someOtherWidget') return ...;
@@ -554,6 +556,8 @@ function getSavableValue(el, key) {
 
 function restoreUiStateData(state) {
     if (!state) return;
+
+    const hasTrackAccessSnapshot = !!state.customState?.trackAccess?.form;
 
     // 1. Restore View
     if (state.activeView) {
@@ -571,6 +575,8 @@ function restoreUiStateData(state) {
             const data = state.formData[id];
             const el = document.getElementById(id);
             if (!el) return;
+            // 새 복구 형식에서는 선로출입 Vue 상태를 아래에서 한 번에 직접 적용합니다.
+            if (hasTrackAccessSnapshot && el.closest('#view-track-access')) return;
 
             // 타입 검사 등 안전장치
             if (el.type === 'checkbox') {
@@ -600,25 +606,16 @@ function restoreUiStateData(state) {
                 applySavableValue(el, key, val);
             }
         });
+
+        restoreERPRecoveryState(state.customState.erpCheck);
+        restoreTrackAccessRecoveryState(state.customState.trackAccess);
     }
 
 }
 
 function applySavableValue(el, key, value) {
     if (key === 'erpLocation') {
-        selectedERPLocation = value;
-        // Search and Select Button
-        // Wait a bit for dynamic content if needed, though usually loaded by now
-        setTimeout(() => {
-            const buttons = el.querySelectorAll('.erp-btn');
-            buttons.forEach(btn => {
-                if (btn.innerText === value) {
-                    btn.classList.add('selected');
-                } else {
-                    btn.classList.remove('selected');
-                }
-            });
-        }, 50);
+        erpState.selectedLocation = erpState.locations.some(loc => loc.name === value) ? value : null;
     }
 }
 
@@ -634,7 +631,10 @@ function switchMainTab(viewId) {
     const navItem = document.querySelector(`.nav-top .menu-item[data-target="${viewId}"]`);
     if (navItem) navItem.classList.add('active');
 
-    if (viewId === 'view-erp-check') {
+    if (viewId === 'view-track-access') {
+        // 프리셋 데이터는 탭 진입 시점에만 현재 UI로 다시 적용합니다.
+        syncTrackPresets(true);
+    } else if (viewId === 'view-erp-check') {
         // Apply User Preference for Inspector Format
         // Logic: If user has a specific preference, override the current state?
         // Or only set initial state? "Initial value" was requested.
@@ -1854,8 +1854,8 @@ function showNativeMsgBox(text, title = "알림") {
     sendMessageToAHK({ command: 'msgbox', text: text, title: title });
 }
 
-function formatPhone(input) {
-    let value = input.value.replace(/[^0-9]/g, '');
+function formatPhoneValue(rawValue) {
+    let value = String(rawValue || '').replace(/[^0-9]/g, '');
     let formatted = '';
 
     if (value.length < 4) {
@@ -1873,13 +1873,17 @@ function formatPhone(input) {
     // Safety cut
     if (formatted.length > 13) formatted = formatted.substr(0, 13);
 
-    input.value = formatted;
+    return formatted;
+}
+
+function formatPhone(input) {
+    input.value = formatPhoneValue(input.value);
 
     // Auto Save is handled by global delegate on 'input' event
 }
 
-function formatTime(input) {
-    let value = input.value.replace(/[^0-9]/g, '');
+function formatTimeValue(rawValue) {
+    let value = String(rawValue || '').replace(/[^0-9]/g, '');
     // Safety cut for HHmm (4 digits)
     if (value.length > 4) value = value.substr(0, 4);
 
@@ -1890,161 +1894,90 @@ function formatTime(input) {
         // HH:mm
         formatted = value.substr(0, 2) + ':' + value.substr(2);
     }
-    input.value = formatted;
+    return formatted;
+}
+
+function formatTime(input) {
+    input.value = formatTimeValue(input.value);
 
     // Auto Save is handled by global delegate on 'input' event
 }
 
 // --- ERP Check Logic ---
-let selectedERPLocation = null;
+const erpState = Vue.reactive({
+    locations: [],
+    selectedLocation: null,
+    statusMap: null,
+    completedOrders: null
+});
 
-function renderERPCheck() {
-    // 1. Get global locations
-    const locations = (appConfig.appSettings && appConfig.appSettings.locations) ? appConfig.appSettings.locations : [];
-
-    // [State Preservation] 렌더링 전 현재 상태 저장 (선택된 장소, 체크표시)
-    const savedSelectedLocation = selectedERPLocation;
-    const savedCheckmarks = new Set();
-    const existingButtons = document.querySelectorAll('.erp-btn[data-order-num]');
-    existingButtons.forEach(btn => {
-        const checkMark = btn.querySelector('.order-check-mark');
-        if (checkMark) {
-            const orderNum = btn.dataset.orderNum;
-            if (orderNum) {
-                savedCheckmarks.add(orderNum);
-            }
-        }
-    });
-
-    // 2. Clear containers
-    const gridSub = document.getElementById('grid-substation');
-    const gridEtc = document.getElementById('grid-etc');
-    const elG1 = document.getElementById('elec-g1');
-    const elG2 = document.getElementById('elec-g2');
-    const elG3 = document.getElementById('elec-g3');
-
-    if (gridSub) gridSub.innerHTML = '';
-    if (gridEtc) gridEtc.innerHTML = '';
-    if (elG1) elG1.innerHTML = '';
-    if (elG2) elG2.innerHTML = '';
-    if (elG3) elG3.innerHTML = '';
-
-    // 선택된 장소는 나중에 복원하므로 여기서는 null로 설정하지 않음
-    // selectedERPLocation = null; // Reset selection - 주석 처리
-
-    // 3. Process Items
-    locations.forEach(loc => {
-        const btn = document.createElement('div');
-        btn.className = 'erp-btn';
-        // Use TextNode to avoid overwriting span later if we appended
-        btn.appendChild(document.createTextNode(loc.name));
-
-        btn.dataset.locName = loc.name;
-        btn.dataset.orderNum = loc.order; // Store Order Number for lookup
-        btn.onclick = () => selectERPLoc(btn, loc.name);
-
-        // [State Preservation] 저장된 체크표시 복원
-        if (savedCheckmarks.has(loc.order)) {
-            const checkSpan = document.createElement('span');
-            checkSpan.className = 'order-check-mark';
-            checkSpan.textContent = '\u2714\uFE0E'; // ✔ (Heavy Check Mark) + Text Presentation Selector
-            checkSpan.style.color = '#00C853'; // Vibrant Green
-            checkSpan.style.marginRight = '5px';
-            checkSpan.style.fontWeight = 'bold';
-            btn.prepend(checkSpan);
-        }
-
-        // [State Preservation] 저장된 선택 상태 복원
-        if (savedSelectedLocation === loc.name) {
-            btn.classList.add('selected');
-            selectedERPLocation = loc.name;
-        }
-
-        if (loc.type === '변전소') {
-            // Default Status Dot (Yellow)
-            const dot = document.createElement('span');
-            dot.className = 'status-dot';
-            dot.style.fontSize = '1.2em';
-            dot.style.marginLeft = '5px';
-            dot.style.fontWeight = 'bold';
-            dot.style.color = '#FFC107'; // Amber/Yellow
-            dot.innerText = '●';
-            dot.title = "데이터 확인 중..."; // Initial tooltip
-            btn.appendChild(dot);
-
-            gridSub.appendChild(btn);
-        } else if (loc.type === '기타업무') {
-            gridEtc.appendChild(btn);
-        } else if (loc.type.startsWith('전기실')) {
-            // Group Matching
-            if (loc.type.includes('그룹1')) {
-                elG1.appendChild(btn);
-            } else if (loc.type.includes('그룹2')) {
-                elG2.appendChild(btn);
-            } else if (loc.type.includes('그룹3')) {
-                elG3.appendChild(btn);
-            } else {
-                gridEtc.appendChild(btn);
-            }
-        }
-    });
-
-    // [State Preservation] 저장된 선택 장소가 더 이상 목록에 없는 경우 초기화
-    if (savedSelectedLocation && !locations.find(loc => loc.name === savedSelectedLocation)) {
-        selectedERPLocation = null;
-    }
-
-    // Apply cached status if available
-    handleERPStatusUpdate(null);
+function getERPWorkersForCurrentTeam() {
+    const uid = selectedUserId;
+    if (!uid || !appConfig.users?.[uid]) return [];
+    const team = appConfig.users[uid].profile?.team || '';
+    return (appConfig.appSettings?.colleagues || [])
+        .filter(worker => team && worker.team === team)
+        .sort((a, b) => {
+            if (a.isManager !== b.isManager) return b.isManager - a.isManager;
+            return a.id.localeCompare(b.id);
+        });
 }
 
-// ... (SelectERPLoc, Toggle, Run logic skipped/unchanged) ...
+function initERPIndividualApp() {
+    Vue.createApp({
+        data() {
+            return { erp: erpState };
+        },
+        methods: {
+            locationsForGroup(group) {
+                return this.erp.locations.filter(loc => {
+                    if (group === 'substation') return loc.type === '변전소';
+                    if (loc.type === '기타업무') return group === 'etc';
+                    if (!loc.type?.startsWith('전기실')) return false;
+                    if (loc.type.includes('그룹1')) return group === 'group1';
+                    if (loc.type.includes('그룹2')) return group === 'group2';
+                    if (loc.type.includes('그룹3')) return group === 'group3';
+                    return group === 'etc';
+                });
+            },
+            selectLocation(name) {
+                this.erp.selectedLocation = name;
+            },
+            isOrderCompleted(order) {
+                return this.erp.completedOrders?.includes(String(order)) || false;
+            },
+            statusColor(name) {
+                if (this.erp.statusMap === null) return '#FFC107';
+                return this.erp.statusMap[name] ? '#4CAF50' : '#FF0000';
+            },
+            statusTitle(name) {
+                if (this.erp.statusMap === null) return '데이터 확인 중...';
+                return this.erp.statusMap[name] ? '점검 완료 (오늘)' : '점검 미완료';
+            }
+        }
+    }).mount('#erp-individual-container');
+}
 
-// --- ERP Status Update (Polling) ---
-let latestERPStatus = null;
+function renderERPCheck() {
+    const locations = appConfig.appSettings?.locations || [];
+    erpState.locations = locations.map(loc => ({ ...loc }));
+    if (erpState.selectedLocation && !locations.some(loc => loc.name === erpState.selectedLocation)) {
+        erpState.selectedLocation = null;
+    }
+    updateERPBatchData();
+}
 
 function handleERPStatusUpdate(statusMap) {
-    if (statusMap) {
-        latestERPStatus = statusMap;
-    } else if (latestERPStatus) {
-        statusMap = latestERPStatus;
-    } else {
-        return; // Keep Yellow
-    }
-
-    const btns = document.querySelectorAll('#grid-substation .erp-btn[data-loc-name]');
-
-    btns.forEach(btn => {
-        const locName = btn.dataset.locName;
-        const dot = btn.querySelector('.status-dot');
-
-        if (dot) {
-            // AHK JSON serialization might send 1 instead of true
-            const isUpdated = statusMap[locName] ? true : false;
-            dot.style.color = isUpdated ? '#4CAF50' : '#FF0000'; // Green vs Red
-            dot.title = isUpdated ? "점검 완료 (오늘)" : "점검 미완료";
-
-            // Re-assert visibility (in case)
-            dot.style.display = 'inline';
-        }
-    });
-
-    // 4차 요구사항(일괄모드 연동)
-    if (erpBatchAppInstance && typeof erpBatchAppInstance.latestStatusMap !== 'undefined') {
-        // Vue3 반응성 시스템 트리거를 위해 객체를 완전히 새로 할당
-        erpBatchAppInstance.latestStatusMap = { ...(statusMap || {}) };
-    }
+    if (statusMap === null || statusMap === undefined) return;
+    erpState.statusMap = { ...statusMap };
+    if (erpBatchAppInstance) erpBatchAppInstance.latestStatusMap = { ...erpState.statusMap };
 }
 
 window.handleERPStatusUpdate = handleERPStatusUpdate;
 
-let latestERPOrders = null;
-
 function handleERPOrderListUpdate(orders) {
-    if (!orders || !Array.isArray(orders)) return;
-
-    // The order list may arrive before the batch-mode Vue app is mounted.
-    latestERPOrders = [...orders];
+    if (!Array.isArray(orders)) return;
+    erpState.completedOrders = orders.map(String);
 
     // 1. Update Timestamp
     const now = new Date();
@@ -2057,73 +1990,100 @@ function handleERPOrderListUpdate(orders) {
 
     document.getElementById('erp-last-update').innerText = timeStr;
 
-    // 2. Mark Buttons
-    orders.forEach(orderNum => {
-        // Find buttons with this order number
-        // Attribute selector queries need quotes if value contains special chars, but orderNum is safe digits usually.
-        const btns = document.querySelectorAll(`.erp-btn[data-order-num="${orderNum}"]`);
-
-        btns.forEach(btn => {
-            // Check if already has checkmark to avoid double adding
-            // We use a specific class for the checkmark span
-            if (!btn.querySelector('.order-check-mark')) {
-                const checkSpan = document.createElement('span');
-                checkSpan.className = 'order-check-mark';
-                checkSpan.textContent = '\u2714\uFE0E'; // ✔ (Heavy Check Mark) + Text Presentation Selector
-                checkSpan.style.color = '#00C853'; // Vibrant Green
-                checkSpan.style.marginRight = '5px';
-                checkSpan.style.fontWeight = 'bold';
-
-                // Prepend to the button content
-                btn.prepend(checkSpan);
-            }
-        });
-    });
-
-    // 4차 요구사항(일괄모드 연동)
-    if (erpBatchAppInstance && typeof erpBatchAppInstance.completedOrders !== 'undefined') {
-        // Vue3 배열 반응성을 위해 새로운 배열 인스턴스 할당
-        erpBatchAppInstance.completedOrders = [...latestERPOrders];
-    }
-}
-
-function selectERPLoc(btn, locName) {
-    // Deselect all
-    document.querySelectorAll('.erp-btn').forEach(el => el.classList.remove('selected'));
-
-    // Select this
-    btn.classList.add('selected');
-    selectedERPLocation = locName;
+    if (erpBatchAppInstance) erpBatchAppInstance.completedOrders = [...erpState.completedOrders];
 }
 
 let erpBatchAppInstance = null;
 let isBatchMode = false;
 
-function toggleERPMode() {
+function setERPMode(useBatchMode) {
     const btn = document.getElementById('btn-erp-mode');
     const indContainer = document.getElementById('erp-individual-container');
     const batchContainer = document.getElementById('erp-batch-container');
+    if (!btn || !indContainer || !batchContainer) return;
 
-    if (btn.innerText.includes('일괄모드')) {
-        // 개별 -> 일괄
+    if (useBatchMode) {
         btn.innerText = '< 개별모드';
         indContainer.style.display = 'none';
         batchContainer.style.display = 'flex';
         isBatchMode = true;
 
-        // Vue App 초기화 (지연 마운트)
         if (!erpBatchAppInstance) {
             initERPBatchApp();
         } else {
-            // 이미 마운트된 경우, 데이터를 최신 워커 목록으로 갱신
             updateERPBatchData();
         }
     } else {
-        // 일괄 -> 개별
         btn.innerText = '일괄모드 >';
         batchContainer.style.display = 'none';
         indContainer.style.display = 'flex';
         isBatchMode = false;
+    }
+}
+
+function toggleERPMode() {
+    setERPMode(!isBatchMode);
+}
+
+function currentLocalDateKey(date = new Date()) {
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+}
+
+function collectERPRecoveryState() {
+    const batchState = erpBatchAppInstance ? {
+        activeRows: [...erpBatchAppInstance.activeRows],
+        selections: Object.fromEntries(
+            erpBatchAppInstance.activeRows.map(name => [name, [...(erpBatchAppInstance.selections[name] || [])]])
+        )
+    } : { activeRows: [], selections: {} };
+
+    return {
+        savedDate: currentLocalDateKey(),
+        mode: isBatchMode ? 'batch' : 'individual',
+        selectedLocation: erpState.selectedLocation,
+        completedOrders: Array.isArray(erpState.completedOrders) ? [...erpState.completedOrders] : null,
+        batch: batchState
+    };
+}
+
+function restoreERPRecoveryState(savedState) {
+    if (!savedState || typeof savedState !== 'object') return;
+
+    const validLocations = new Set(erpState.locations.map(location => location.name));
+    erpState.selectedLocation = validLocations.has(savedState.selectedLocation)
+        ? savedState.selectedLocation
+        : null;
+
+    // 완료 오더는 날짜가 바뀌면 이전 날짜의 체크를 표시하지 않습니다.
+    if (savedState.savedDate === currentLocalDateKey() && Array.isArray(savedState.completedOrders)) {
+        erpState.completedOrders = savedState.completedOrders.map(String);
+    }
+
+    setERPMode(savedState.mode === 'batch');
+    if (!erpBatchAppInstance) return;
+
+    const savedBatch = savedState.batch || {};
+    const activeRows = Array.isArray(savedBatch.activeRows)
+        ? savedBatch.activeRows.filter(name => validLocations.has(name))
+        : [];
+    const workerIds = new Map(erpBatchAppInstance.workers.map(worker => [String(worker.id), worker.id]));
+    const selections = {};
+    activeRows.forEach(name => {
+        const savedWorkerIds = Array.isArray(savedBatch.selections?.[name])
+            ? savedBatch.selections[name]
+            : [];
+        selections[name] = savedWorkerIds
+            .map(id => workerIds.get(String(id)))
+            .filter(id => id !== undefined);
+    });
+
+    erpBatchAppInstance.activeRows = activeRows;
+    erpBatchAppInstance.selections = selections;
+    if (Array.isArray(erpState.completedOrders)) {
+        erpBatchAppInstance.completedOrders = [...erpState.completedOrders];
     }
 }
 
@@ -2151,40 +2111,20 @@ function initERPBatchApp() {
                     appConfig.appSettings.locations.forEach(loc => {
                         let shortType = loc.type || '';
                         if (shortType.startsWith('전기실')) shortType = '전기실';
-                        locs.push({ name: loc.name, type: shortType, order: loc.order });
+                        locs.push({ name: loc.name, type: shortType, order: String(loc.order ?? '') });
                     });
                 }
                 this.locations = locs;
 
                 // 로그인 유저 목록 또는 설정된 분소원 목록에서 워커 데이터 추출
-                this.workers = [];
-                const uid = selectedUserId;
-                if (uid && appConfig && appConfig.users && appConfig.users[uid]) {
-                    const userProfile = appConfig.users[uid].profile || {};
-                    const myTeam = userProfile.team || '';
-                    const allColleagues = appConfig.appSettings?.colleagues || [];
-
-                    // 필터링: 모달팝업(개별모드)과 동일하게 본인 부서만 표출
-                    const filteredWorkers = allColleagues.filter(w => {
-                        if (myTeam && w.team === myTeam) return true;
-                        return false;
-                    });
-
-                    // 정렬 로직 적용 (분소장 1순위, 사번순)
-                    const sortedWorkers = [...filteredWorkers].sort((a, b) => {
-                        if (a.isManager !== b.isManager) return b.isManager - a.isManager;
-                        return a.id.localeCompare(b.id);
-                    });
-
-                    this.workers = sortedWorkers.map(w => ({ id: w.id, name: w.name }));
-                }
+                this.workers = getERPWorkersForCurrentTeam().map(w => ({ id: w.id, name: w.name }));
 
                 // Restore results received before this Vue app was mounted.
-                if (latestERPStatus !== null) {
-                    this.latestStatusMap = { ...latestERPStatus };
+                if (erpState.statusMap !== null) {
+                    this.latestStatusMap = { ...erpState.statusMap };
                 }
-                if (latestERPOrders !== null) {
-                    this.completedOrders = [...latestERPOrders];
+                if (erpState.completedOrders !== null) {
+                    this.completedOrders = [...erpState.completedOrders];
                 }
             },
             isRowActive(locName) {
@@ -2681,6 +2621,16 @@ function renderWorkLogWorkerList() {
     // Initial Driver Enable Check
     const isDay = document.querySelector('input[name="work-type"][value="day"]').checked;
     enableDriverSelects(!isDay);
+
+    // 작업자 목록이 다시 렌더링되어도 이미 받은 근태 조회 상태를 유지한다.
+    updateGuntaeStatusLabel(Array.isArray(guntaeData) && guntaeData.length > 0);
+}
+
+function updateGuntaeStatusLabel(completed) {
+    const statusLabel = document.getElementById('worker-search-status');
+    if (!statusLabel) return;
+    statusLabel.style.display = completed ? 'inline' : 'none';
+    if (completed) statusLabel.textContent = '근태조회완료';
 }
 
 // 근태 조회 결과를 작업자 목록에 적용
@@ -2714,11 +2664,7 @@ function applyGuntaeData(data) {
     });
 
     // 상태 라벨 표시
-    const statusLabel = document.getElementById('worker-search-status');
-    if (statusLabel) {
-        statusLabel.style.display = 'inline';
-        statusLabel.textContent = '근태조회완료';
-    }
+    updateGuntaeStatusLabel(data.length > 0);
 
     updateWorkerStats();
 }
@@ -2949,175 +2895,79 @@ function updateDayShiftWorkers(isDay) {
 
 // Work Log Exports
 // --- ERP Worker Modal Logic ---
+let erpWorkerModalAppInstance = null;
 
-let erpModalWorkerList = []; // Cache list
+function initERPWorkerModalApp() {
+    erpWorkerModalAppInstance = Vue.createApp({
+        data() {
+            return {
+                isOpen: false,
+                workers: [],
+                selectedWorkerIds: [],
+                isListMode: false
+            };
+        },
+        computed: {
+            selectedWorkers() {
+                return this.workers.filter(worker => this.selectedWorkerIds.includes(worker.id));
+            },
+            buttonText() {
+                const names = this.selectedWorkers.map(worker => worker.name);
+                if (names.length === 0) return '(선택 없음)';
+                if (this.isListMode) return names.join(', ');
+                return names.length === 1 ? names[0] : `${names[0]} 외 ${names.length - 1}명`;
+            }
+        },
+        methods: {
+            openModal() {
+                if (!erpState.selectedLocation) {
+                    showNativeMsgBox('점검 장소를 선택해주세요.');
+                    return;
+                }
+                this.workers = getERPWorkersForCurrentTeam();
+                this.selectedWorkerIds = this.workers.map(worker => worker.id);
+                this.isListMode = document.getElementById('toggle-worker-format').checked;
+                this.isOpen = true;
+            },
+            closeModal() {
+                this.isOpen = false;
+            },
+            toggleFormat() {
+                const mainToggle = document.getElementById('toggle-worker-format');
+                mainToggle.checked = !mainToggle.checked;
+                mainToggle.dispatchEvent(new Event('change', { bubbles: true }));
+                this.isListMode = mainToggle.checked;
+            },
+            submitTask() {
+                const members = this.selectedWorkers.map(worker => worker.name);
+                if (members.length === 0) {
+                    showNativeMsgBox('작업자를 한 명 이상 선택해주세요.');
+                    return;
+                }
+
+                const location = erpState.locations.find(loc => loc.name === erpState.selectedLocation);
+                if (!location) {
+                    showNativeMsgBox('점검 장소를 다시 선택해주세요.');
+                    return;
+                }
+
+                sendMessageToAHK({
+                    command: 'runTask',
+                    task: 'ERPCheck',
+                    location: location.name,
+                    targetType: location.type || '',
+                    targetOrder: location.order || '',
+                    members,
+                    format: this.isListMode ? 'list' : 'summary'
+                });
+                this.closeModal();
+            }
+        }
+    }).mount('#erp-worker-modal');
+}
 
 function openERPWorkerModal() {
-    if (!selectedERPLocation) {
-        showNativeMsgBox("점검 장소를 선택해주세요.");
-        return;
-    }
-
-
-    const modal = document.getElementById('erp-worker-modal');
-    modal.style.display = 'flex';
-
-    // Sync Toggle State from Main Tab
-    const mainToggle = document.getElementById('toggle-worker-format');
-    updateModalToggleState(mainToggle.checked);
-
-    // Render List
-    renderERPWorkerList();
-}
-
-function closeERPWorkerModal() {
-    document.getElementById('erp-worker-modal').style.display = 'none';
-}
-
-function renderERPWorkerList() {
-    const uid = selectedUserId;
-    if (!uid || !appConfig.users || !appConfig.users[uid]) return;
-
-    // Use global appSettings.colleagues
-    const allColleagues = appConfig.appSettings?.colleagues || [];
-
-    // Get My Team
-    const user = appConfig.users[uid];
-    const myTeam = (user.profile && user.profile.team) ? user.profile.team : '';
-
-    const container = document.getElementById('erp-worker-list');
-    container.innerHTML = '';
-
-    // Filter: ID Match (if needed) or Team Match
-    // Logic: Config colleagues contains EVERYONE. We need to filter by myTeam.
-    const filteredWorkers = allColleagues.filter(w => {
-        if (myTeam && w.team === myTeam) return true;
-        return false;
-    });
-
-    if (filteredWorkers.length === 0) {
-        container.innerHTML = '<div style="grid-column:1/-1; text-align:center; padding:20px; color:#999;">점검자 목록이 없습니다.<br>설정에서 작업자를 추가해주세요.</div>';
-        return;
-    }
-
-    // Sort: Manager First, then ID
-    const sortedWorkers = [...filteredWorkers].sort((a, b) => {
-        if (a.isManager !== b.isManager) return b.isManager - a.isManager;
-        return a.id.localeCompare(b.id);
-    });
-
-    erpModalWorkerList = sortedWorkers; // Cache for submission
-
-    sortedWorkers.forEach(worker => {
-        const div = document.createElement('div');
-        div.className = 'worker-checkbox-item';
-        // Remove custom onclick handler (causes double-toggle with label)
-
-        const isChecked = true; // Default Select All
-
-        div.innerHTML = `
-            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; width:100%; color:black;">
-                <input type="checkbox" id="chk-erp-${worker.id}" ${isChecked ? 'checked' : ''} value="${worker.name}" onchange="updateModalButtonText()" style="width:16px; height:16px; accent-color:#4CAF50;">
-                <span style="font-size:14px; margin-top:1px;">${worker.name}</span>
-            </label>
-        `;
-        container.appendChild(div);
-    });
-
-    // Initial Button Text Update
-    updateModalButtonText();
-}
-
-function toggleModalWorkerFormat() {
-    // Toggle the Main Tab Switch (Source of Truth)
-    const mainToggle = document.getElementById('toggle-worker-format');
-    mainToggle.checked = !mainToggle.checked;
-
-    // Trigger change event to save state if needed (savable-ui) and update styles
-    mainToggle.dispatchEvent(new Event('change', { bubbles: true }));
-
-    updateModalToggleState(mainToggle.checked);
-    updateModalButtonText(); // Update text format
-}
-
-function updateModalToggleState(isListMode) {
-    // No longer changing button text here based on mode alone, 
-    // now we update based on selection + mode in updateModalButtonText
-}
-
-// Renamed/Refactored: Updates the button text dynamically
-function updateModalButtonText() {
-    const isListMode = document.getElementById('toggle-worker-format').checked;
-    const btn = document.getElementById('btn-erp-modal-toggle');
-
-    // Gather selected names
-    const selectedNames = [];
-    const checkboxes = document.querySelectorAll('#erp-worker-list input[type="checkbox"]');
-    checkboxes.forEach(c => {
-        if (c.checked) selectedNames.push(c.value);
-    });
-
-    if (selectedNames.length === 0) {
-        btn.innerText = "(선택 없음)";
-        return;
-    }
-
-    if (isListMode) {
-        // List Mode: "Name1, Name2, Name3"
-        btn.innerText = selectedNames.join(', ');
-    } else {
-        // Summary Mode: "Name1 외 N명"
-        if (selectedNames.length === 1) {
-            btn.innerText = selectedNames[0];
-        } else {
-            btn.innerText = `${selectedNames[0]} 외 ${selectedNames.length - 1}명`;
-        }
-    }
-}
-
-function submitERPTask() {
-    // 1. Gather Selected Workers
-    const selectedNames = [];
-    const checkboxes = document.querySelectorAll('#erp-worker-list input[type="checkbox"]');
-    checkboxes.forEach(c => {
-        if (c.checked) selectedNames.push(c.value);
-    });
-
-    if (selectedNames.length === 0) {
-        showNativeMsgBox("작업자를 한 명 이상 선택해주세요.");
-        return;
-    }
-
-    // 2. Check Format
-    const isListMode = document.getElementById('toggle-worker-format').checked;
-    const format = isListMode ? 'list' : 'summary';
-
-    // 3. Find Location Data (Type, Order)
-    const locName = selectedERPLocation;
-    let locType = "";
-    let locOrder = "";
-
-    // appConfig.appSettings.locations should be available
-    if (appConfig.appSettings && appConfig.appSettings.locations) {
-        const locObj = appConfig.appSettings.locations.find(l => l.name === locName);
-        if (locObj) {
-            locType = locObj.type || "";
-            locOrder = locObj.order || "";
-        }
-    }
-
-    // 4. Send to AHK
-    sendMessageToAHK({
-        command: 'runTask',
-        task: 'ERPCheck',
-        location: locName,
-        targetType: locType,
-        targetOrder: locOrder,
-        members: selectedNames,
-        format: format
-    });
-
-    closeERPWorkerModal();
+    erpWorkerModalAppInstance.openModal();
 }
 
 function updateToggleStyle() {
@@ -3139,9 +2989,6 @@ function updateToggleStyle() {
 
 // Global Exports
 window.openERPWorkerModal = openERPWorkerModal;
-window.closeERPWorkerModal = closeERPWorkerModal;
-window.toggleModalWorkerFormat = toggleModalWorkerFormat;
-window.submitERPTask = submitERPTask;
 window.handleWorkTypeChange = handleWorkTypeChange;
 window.toggleAllWorkers = toggleAllWorkers;
 window.updateToggleStyle = updateToggleStyle;
@@ -3212,238 +3059,197 @@ function renderPresetOptions(selectId, presets) {
     }
 }
 
-// --- Track Access Logic ---
+// --- Track Access Logic (Vue) ---
+const TRACK_ACCESS_DEFAULTS = Object.freeze({
+    workType: '1', content: '', workFrom: '', workTo: '',
+    driverName: '', driverPhone: '', workerName: '', workerPhone: '',
+    safetyName: '', safetyPhone: '', supervisorName: '', supervisorId: '',
+    workStart: '', workEnd: '', opStart: '', opEnd: '',
+    line: '1', trackType: '1', trackCutoff: false,
+    agreementNo: '', totalCount: '', stationInput: false
+});
+
+const trackAccessState = Vue.reactive({
+    presets: {},
+    selectedPreset: '__NEW__',
+    form: { ...TRACK_ACCESS_DEFAULTS },
+    hasSyncedPresets: false,
+    ownerId: null
+});
+let trackAccessAppInstance = null;
+
+function trackBoolean(value) {
+    return value === true || value === 1 || value === '1' || value === 'Y' || value === 'true';
+}
+
+function normalizeTrackPreset(data = {}) {
+    const normalized = {};
+    Object.keys(TRACK_ACCESS_DEFAULTS).forEach(key => {
+        if (key === 'trackCutoff' || key === 'stationInput') {
+            normalized[key] = trackBoolean(data[key]);
+        } else {
+            const fallback = TRACK_ACCESS_DEFAULTS[key];
+            normalized[key] = data[key] === undefined || data[key] === null ? fallback : String(data[key]);
+        }
+    });
+    return normalized;
+}
+
+function clearTrackAccessForm() {
+    Object.assign(trackAccessState.form, TRACK_ACCESS_DEFAULTS);
+}
+
+function collectTrackAccessRecoveryState() {
+    return {
+        selectedPreset: trackAccessState.selectedPreset,
+        form: { ...normalizeTrackPreset(trackAccessState.form) }
+    };
+}
+
+function restoreTrackAccessRecoveryState(savedState) {
+    if (!savedState?.form || typeof savedState.form !== 'object') return;
+
+    const savedPreset = savedState.selectedPreset;
+    trackAccessState.selectedPreset = savedPreset === '__NEW__' || trackAccessState.presets[savedPreset]
+        ? savedPreset
+        : '__NEW__';
+    Object.assign(trackAccessState.form, normalizeTrackPreset(savedState.form));
+}
+
+function initTrackAccessApp() {
+    trackAccessAppInstance = Vue.createApp({
+        data() {
+            return { track: trackAccessState };
+        },
+        methods: {
+            loadPreset: loadTrackPreset,
+            savePreset: saveTrackPreset,
+            renamePreset: renameTrackPreset,
+            deletePreset: deleteTrackPreset,
+            runTask: runTrackAccessTask,
+            formatField(field, event, type) {
+                const formatter = type === 'phone' ? formatPhoneValue : formatTimeValue;
+                this.track.form[field] = formatter(event.target.value);
+            },
+            digitsOnly(field, event) {
+                this.track.form[field] = event.target.value.replace(/[^0-9]/g, '');
+            }
+        }
+    }).mount('#view-track-access');
+}
+
+function syncTrackPresets(forceLoad = false) {
+    const presets = getUserPresets('track');
+    const keys = Object.keys(presets);
+    const current = trackAccessState.selectedPreset;
+    const ownerChanged = trackAccessState.ownerId !== selectedUserId;
+    trackAccessState.presets = { ...presets };
+
+    let next = '__NEW__';
+    if (keys.length > 0) next = presets[current] ? current : keys[0];
+    const shouldLoad = forceLoad || ownerChanged || !trackAccessState.hasSyncedPresets || next !== current;
+    trackAccessState.selectedPreset = next;
+    trackAccessState.hasSyncedPresets = true;
+    trackAccessState.ownerId = selectedUserId;
+    if (shouldLoad) loadTrackPreset();
+}
+
 function loadTrackPreset() {
-    const sel = document.getElementById('track-preset-sel');
-    const key = sel.value;
-
-    if (key === '__NEW__') {
-        // Clear Form for New Entry
-        setVal('ta-work-type', '1');
-        setVal('ta-work-content', '');
-        setVal('ta-work-from', '');
-        setVal('ta-work-to', '');
-        setVal('ta-driver-name', '');
-        setVal('ta-driver-phone', '');
-        setVal('ta-worker-name', '');
-        setVal('ta-worker-phone', '');
-        setVal('ta-safety-name', '');
-        setVal('ta-safety-phone', '');
-        setVal('ta-supervisor-name', '');
-        setVal('ta-supervisor-id', '');
-
-        setVal('ta-work-start', '');
-        setVal('ta-work-end', '');
-        setVal('ta-op-start', '');
-        setVal('ta-op-end', '');
-        setVal('ta-line', '1');
-        setVal('ta-track-type', '1');
-        if (document.getElementById('ta-track-cutoff')) document.getElementById('ta-track-cutoff').checked = false;
-        setVal('ta-agreement-no', '');
-        setVal('ta-total-count', '');
-        if (document.getElementById('ta-station-input')) document.getElementById('ta-station-input').checked = false;
+    const key = trackAccessState.selectedPreset;
+    if (!key || key === '__NEW__') {
+        clearTrackAccessForm();
         return;
     }
+    const data = trackAccessState.presets[key] || getUserPresets('track')[key];
+    if (data) Object.assign(trackAccessState.form, normalizeTrackPreset(data));
+}
 
-    if (!key) return;
-
-    const presets = getUserPresets('track');
-    const data = presets[key];
-
-    if (data) {
-        setVal('ta-work-type', data.workType);
-        setVal('ta-work-content', data.content);
-        setVal('ta-work-from', data.workFrom);
-        setVal('ta-work-to', data.workTo);
-        setVal('ta-driver-name', data.driverName);
-        setVal('ta-driver-phone', data.driverPhone);
-        setVal('ta-worker-name', data.workerName);
-        setVal('ta-worker-phone', data.workerPhone);
-        setVal('ta-safety-name', data.safetyName);
-        setVal('ta-safety-phone', data.safetyPhone);
-        setVal('ta-supervisor-name', data.supervisorName);
-        setVal('ta-supervisor-id', data.supervisorId);
-
-        setVal('ta-work-start', data.workStart);
-        setVal('ta-work-end', data.workEnd);
-        setVal('ta-op-start', data.opStart);
-        setVal('ta-op-end', data.opEnd);
-        setVal('ta-line', data.line);
-        setVal('ta-track-type', data.trackType);
-
-        if (document.getElementById('ta-track-cutoff')) document.getElementById('ta-track-cutoff').checked = !!data.trackCutoff;
-        setVal('ta-agreement-no', data.agreementNo);
-        setVal('ta-total-count', data.totalCount);
-        if (document.getElementById('ta-station-input')) document.getElementById('ta-station-input').checked = !!data.stationInput;
-    }
+function getTrackPresetData() {
+    return {
+        ...normalizeTrackPreset(trackAccessState.form),
+        agreementNoDate: new Date().toISOString().slice(0, 10)
+    };
 }
 
 function saveTrackPreset() {
-    const sel = document.getElementById('track-preset-sel');
-    let key = sel.value;
-
+    let key = trackAccessState.selectedPreset;
     if (!key || key === '__NEW__') {
-        const newName = prompt("새 프리셋 이름을 입력하세요:");
-        if (!newName) return;
-        key = newName;
+        key = (prompt('새 프리셋 이름을 입력하세요:') || '').trim();
+        if (!key) return;
     }
 
-    const data = {
-        workType: getVal('ta-work-type'),
-        content: getVal('ta-work-content'),
-        workFrom: getVal('ta-work-from'),
-        workTo: getVal('ta-work-to'),
-        driverName: getVal('ta-driver-name'),
-        driverPhone: getVal('ta-driver-phone'),
-        workerName: getVal('ta-worker-name'),
-        workerPhone: getVal('ta-worker-phone'),
-        safetyName: getVal('ta-safety-name'),
-        safetyPhone: getVal('ta-safety-phone'),
-        supervisorName: getVal('ta-supervisor-name'),
-        supervisorId: getVal('ta-supervisor-id'),
-
-        workStart: getVal('ta-work-start'),
-        workEnd: getVal('ta-work-end'),
-        opStart: getVal('ta-op-start'),
-        opEnd: getVal('ta-op-end'),
-        line: getVal('ta-line'),
-        trackType: getVal('ta-track-type'),
-        trackCutoff: document.getElementById('ta-track-cutoff') ? document.getElementById('ta-track-cutoff').checked : false,
-        agreementNo: getVal('ta-agreement-no'),
-        agreementNoDate: new Date().toISOString().slice(0, 10),
-        totalCount: getVal('ta-total-count'),
-        stationInput: document.getElementById('ta-station-input') ? document.getElementById('ta-station-input').checked : false
-    };
-
     const presets = getUserPresets('track');
-    presets[key] = data;
+    presets[key] = getTrackPresetData();
+    trackAccessState.selectedPreset = key;
     saveUserPresets('track', presets);
-
-    renderPresetOptions('track-preset-sel', presets);
-    sel.value = key;
-
+    syncTrackPresets();
     showNativeMsgBox(`'${key}' 프리셋이 저장되었습니다.`);
 }
 
 function renameTrackPreset() {
-    const sel = document.getElementById('track-preset-sel');
-    const oldKey = sel.value;
+    const oldKey = trackAccessState.selectedPreset;
     if (!oldKey || oldKey === '__NEW__') {
-        showNativeMsgBox("이름을 변경할 프리셋을 선택해주세요.");
+        showNativeMsgBox('이름을 변경할 프리셋을 선택해주세요.');
         return;
     }
 
-    const newKey = prompt("새 이름을 입력하세요:", oldKey);
+    const newKey = (prompt('새 이름을 입력하세요:', oldKey) || '').trim();
     if (!newKey || newKey === oldKey) return;
 
     const presets = getUserPresets('track');
     if (presets[newKey]) {
-        showNativeMsgBox("이미 존재하는 이름입니다.");
+        showNativeMsgBox('이미 존재하는 이름입니다.');
         return;
     }
 
     presets[newKey] = presets[oldKey];
     delete presets[oldKey];
+    trackAccessState.selectedPreset = newKey;
     saveUserPresets('track', presets);
-
-    renderPresetOptions('track-preset-sel', presets);
-    sel.value = newKey;
+    syncTrackPresets();
 }
 
 function deleteTrackPreset() {
-    const sel = document.getElementById('track-preset-sel');
-    const key = sel.value;
+    const key = trackAccessState.selectedPreset;
     if (!key || key === '__NEW__') {
-        showNativeMsgBox("삭제할 프리셋을 선택해주세요.");
+        showNativeMsgBox('삭제할 프리셋을 선택해주세요.');
         return;
     }
-
     if (!confirm(`'${key}' 프리셋을 삭제하시겠습니까?`)) return;
 
     const presets = getUserPresets('track');
     delete presets[key];
+    trackAccessState.selectedPreset = '__NEW__';
     saveUserPresets('track', presets);
+    syncTrackPresets(true);
+}
 
-    renderPresetOptions('track-preset-sel', presets);
+function trackAgreementNeedsRenewal(today = new Date()) {
+    const day = today.getDate();
+    const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+    if (day > 15 && day !== lastDay) return false;
 
-    // Auto-select logic is handled inside renderPresetOptions if we pass nothing, 
-    // BUT renderPresetOptions expects to respect currentVal if passed.
-    // Since we deleted the key, we should let it default.
-    // However, our renderPresetOptions helper tries to keep selection.
-    // Let's manually trigger the logic again.
+    const key = trackAccessState.selectedPreset;
+    const preset = key && key !== '__NEW__' ? getUserPresets('track')[key] : null;
+    if (!preset) return false;
+    if (!preset.agreementNoDate) return !!preset.agreementNo;
 
-    // Quick Fix: renderPresetOptions handles init logic if we don't set value explicitly?
-    // Actually, renderPresetOptions uses 'sel.value' to determine previous value.
-    // We should clear it before calling? No, it reads it.
-
-    // Correct approach using our new robust renderPresetOptions:
-    // 1. Value is still the deleted key technically before we re-render? No, we re-render options.
-    // Actually, let's just trigger the 'change' event on the first item if exists.
-
-    const newKeys = Object.keys(presets);
-    if (newKeys.length > 0) {
-        sel.value = newKeys[0];
-    } else {
-        sel.value = "__NEW__";
-    }
-    sel.dispatchEvent(new Event('change'));
+    const diff = (today - new Date(preset.agreementNoDate)) / (1000 * 60 * 60 * 24);
+    return diff > 15;
 }
 
 function runTrackAccessTask() {
-    // 협의번호 갱신 필요 여부 체크
-    let needsRenewal = false;
-    const today = new Date();
-
-    // 이번 달의 마지막 날짜 구하기 (윤달 등 반영)
-    const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-    const isLastDay = today.getDate() === lastDay;
-
-    if (today.getDate() <= 15 || isLastDay) {
-        const sel = document.getElementById('track-preset-sel');
-        const presetKey = sel ? sel.value : '';
-        if (presetKey && presetKey !== '__NEW__') {
-            const presets = getUserPresets('track');
-            const preset = presets[presetKey];
-            if (preset && preset.agreementNoDate) {
-                const diff = (today - new Date(preset.agreementNoDate)) / (1000 * 60 * 60 * 24);
-                if (diff > 15) needsRenewal = true;
-            } else if (preset && !preset.agreementNoDate && preset.agreementNo) {
-                needsRenewal = true;
-            }
-        }
-    }
+    const needsRenewal = trackAgreementNeedsRenewal();
     if (needsRenewal) {
         alert('협의번호 갱신이 필요합니다.\n 매크로 진행 중 협의번호를 확인 후 입력박스에 입력해 주세요.');
     }
 
     const data = {
-        workType: getVal('ta-work-type'),
-        content: getVal('ta-work-content'),
-        workFrom: getVal('ta-work-from'),
-        workTo: getVal('ta-work-to'),
-        driverName: getVal('ta-driver-name'),
-        driverPhone: getVal('ta-driver-phone'),
-        workerName: getVal('ta-worker-name'),
-        workerPhone: getVal('ta-worker-phone'),
-        safetyName: getVal('ta-safety-name'),
-        safetyPhone: getVal('ta-safety-phone'),
-        supervisorName: getVal('ta-supervisor-name'),
-        supervisorId: getVal('ta-supervisor-id'),
-
-        workStart: getVal('ta-work-start'),
-        workEnd: getVal('ta-work-end'),
-        opStart: getVal('ta-op-start'),
-        opEnd: getVal('ta-op-end'),
-        line: getVal('ta-line'),
-        trackType: getVal('ta-track-type'),
-        trackCutoff: document.getElementById('ta-track-cutoff') ? document.getElementById('ta-track-cutoff').checked : false,
-        agreementNo: needsRenewal ? '' : getVal('ta-agreement-no'),
-        needsRenewal: needsRenewal,
-        totalCount: getVal('ta-total-count'),
-        stationInput: document.getElementById('ta-station-input') ? document.getElementById('ta-station-input').checked : false
+        ...normalizeTrackPreset(trackAccessState.form),
+        agreementNo: needsRenewal ? '' : trackAccessState.form.agreementNo,
+        needsRenewal
     };
-
-    sendMessageToAHK({ command: 'runTask', task: 'TrackAccess', data: data });
+    sendMessageToAHK({ command: 'runTask', task: 'TrackAccess', data });
 }
 
 
@@ -3626,9 +3432,8 @@ function setVal(id, val) {
 
 // Helper: Init Presets after login
 function initPresets() {
-    const trackPresets = getUserPresets('track');
     const vehiclePresets = getUserPresets('vehicle');
-    renderPresetOptions('track-preset-sel', trackPresets);
+    syncTrackPresets();
     renderPresetOptions('vehicle-preset-sel', vehiclePresets);
 }
 

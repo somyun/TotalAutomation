@@ -343,12 +343,22 @@
                 <!-- Scrollable Content -->
                 <div class="view-content">
                     <div class="erp-container savable-ui" data-save-key="erpLocation">
-                        <div class="erp-compact-layout" id="erp-individual-container">
+                        <div class="erp-compact-layout" id="erp-individual-container" v-cloak>
                             <!-- Row 1: Substation -->
                             <div class="erp-row">
                                 <div class="erp-label-col">변전소</div>
                                 <div class="erp-content-col">
-                                    <div class="erp-grid-3" id="grid-substation"></div>
+                                    <div class="erp-grid-3" id="grid-substation">
+                                        <div class="erp-btn" v-for="loc in locationsForGroup('substation')"
+                                            :key="loc.name + ':' + loc.order" :data-loc-name="loc.name"
+                                            :data-order-num="loc.order" :class="{ selected: erp.selectedLocation === loc.name }"
+                                            @click="selectLocation(loc.name)">
+                                            <span v-if="isOrderCompleted(loc.order)" class="order-check-mark">&#10004;&#xFE0E;</span>
+                                            {{ loc.name }}
+                                            <span class="status-dot" :style="{ color: statusColor(loc.name) }"
+                                                :title="statusTitle(loc.name)">●</span>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
 
@@ -359,15 +369,39 @@
                                     <div class="erp-group-container">
                                         <div class="erp-group-stack">
                                             <div class="erp-sub-header">그룹 1</div>
-                                            <div class="erp-btn-stack" id="elec-g1"></div>
+                                            <div class="erp-btn-stack" id="elec-g1">
+                                                <div class="erp-btn" v-for="loc in locationsForGroup('group1')"
+                                                    :key="loc.name + ':' + loc.order" :data-loc-name="loc.name"
+                                                    :data-order-num="loc.order" :class="{ selected: erp.selectedLocation === loc.name }"
+                                                    @click="selectLocation(loc.name)">
+                                                    <span v-if="isOrderCompleted(loc.order)" class="order-check-mark">&#10004;&#xFE0E;</span>
+                                                    {{ loc.name }}
+                                                </div>
+                                            </div>
                                         </div>
                                         <div class="erp-group-stack">
                                             <div class="erp-sub-header">그룹 2</div>
-                                            <div class="erp-btn-stack" id="elec-g2"></div>
+                                            <div class="erp-btn-stack" id="elec-g2">
+                                                <div class="erp-btn" v-for="loc in locationsForGroup('group2')"
+                                                    :key="loc.name + ':' + loc.order" :data-loc-name="loc.name"
+                                                    :data-order-num="loc.order" :class="{ selected: erp.selectedLocation === loc.name }"
+                                                    @click="selectLocation(loc.name)">
+                                                    <span v-if="isOrderCompleted(loc.order)" class="order-check-mark">&#10004;&#xFE0E;</span>
+                                                    {{ loc.name }}
+                                                </div>
+                                            </div>
                                         </div>
                                         <div class="erp-group-stack">
                                             <div class="erp-sub-header">그룹 3</div>
-                                            <div class="erp-btn-stack" id="elec-g3"></div>
+                                            <div class="erp-btn-stack" id="elec-g3">
+                                                <div class="erp-btn" v-for="loc in locationsForGroup('group3')"
+                                                    :key="loc.name + ':' + loc.order" :data-loc-name="loc.name"
+                                                    :data-order-num="loc.order" :class="{ selected: erp.selectedLocation === loc.name }"
+                                                    @click="selectLocation(loc.name)">
+                                                    <span v-if="isOrderCompleted(loc.order)" class="order-check-mark">&#10004;&#xFE0E;</span>
+                                                    {{ loc.name }}
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -377,7 +411,15 @@
                             <div class="erp-row">
                                 <div class="erp-label-col">기타업무</div>
                                 <div class="erp-content-col">
-                                    <div class="erp-grid-3" id="grid-etc"></div>
+                                    <div class="erp-grid-3" id="grid-etc">
+                                        <div class="erp-btn" v-for="loc in locationsForGroup('etc')"
+                                            :key="loc.name + ':' + loc.order" :data-loc-name="loc.name"
+                                            :data-order-num="loc.order" :class="{ selected: erp.selectedLocation === loc.name }"
+                                            @click="selectLocation(loc.name)">
+                                            <span v-if="isOrderCompleted(loc.order)" class="order-check-mark">&#10004;&#xFE0E;</span>
+                                            {{ loc.name }}
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -457,17 +499,18 @@
             </div>
 
             <!-- Track Access View -->
-            <div id="view-track-access" class="view-section">
+            <div id="view-track-access" class="view-section" v-cloak>
                 <div class="view-header">
                     <div class="header-row">
                         <h1>선로출입관리</h1>
                         <div class="preset-controls">
-                            <select id="track-preset-sel" class="preset-select" onchange="loadTrackPreset()"
-                                ondblclick="renameTrackPreset()">
-                                <!-- Options will be populated by JS, including 'New Preset' -->
+                            <select id="track-preset-sel" class="preset-select" v-model="track.selectedPreset"
+                                @change="loadPreset" @dblclick="renamePreset">
+                                <option v-for="(_, name) in track.presets" :key="name" :value="name">{{ name }}</option>
+                                <option value="__NEW__">+ 새 프리셋 추가</option>
                             </select>
-                            <button class="secondary-btn small" onclick="saveTrackPreset()">저장</button>
-                            <button class="danger-btn small" onclick="deleteTrackPreset()">삭제</button>
+                            <button class="secondary-btn small" @click="savePreset">저장</button>
+                            <button class="danger-btn small" @click="deletePreset">삭제</button>
                         </div>
                     </div>
                 </div>
@@ -478,7 +521,7 @@
                         <div class="grid-col">
                             <div class="form-group">
                                 <label>작업구분</label>
-                                <select id="ta-work-type">
+                                <select id="ta-work-type" v-model="track.form.workType">
                                     <option value="1">선로일시 사용중지</option>
                                     <option value="2">본선-철도장비운행</option>
                                     <option value="3">본선-역 출입 작업</option>
@@ -492,43 +535,46 @@
                             </div>
                             <div class="form-group">
                                 <label>작업내역</label>
-                                <input type="text" id="ta-work-content">
+                                <input type="text" id="ta-work-content" v-model="track.form.content">
                             </div>
                             <div class="form-group">
                                 <label>작업구간 (From ~ To)</label>
                                 <div class="pair-input">
-                                    <input type="text" id="ta-work-from" placeholder="From">
+                                    <input type="text" id="ta-work-from" placeholder="From" v-model="track.form.workFrom">
                                     <span class="tilde">~</span>
-                                    <input type="text" id="ta-work-to" placeholder="To">
+                                    <input type="text" id="ta-work-to" placeholder="To" v-model="track.form.workTo">
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label>운전원</label>
                                 <div class="pair-input">
-                                    <input type="text" id="ta-driver-name" placeholder="이름">
-                                    <input type="text" id="ta-driver-phone" placeholder="연락처">
+                                    <input type="text" id="ta-driver-name" placeholder="이름" v-model="track.form.driverName">
+                                    <input type="text" id="ta-driver-phone" placeholder="연락처" v-model="track.form.driverPhone"
+                                        @input="formatField('driverPhone', $event, 'phone')">
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label>작업자</label>
                                 <div class="pair-input">
-                                    <input type="text" id="ta-worker-name" placeholder="이름">
-                                    <input type="text" id="ta-worker-phone" placeholder="연락처">
+                                    <input type="text" id="ta-worker-name" placeholder="이름" v-model="track.form.workerName">
+                                    <input type="text" id="ta-worker-phone" placeholder="연락처" v-model="track.form.workerPhone"
+                                        @input="formatField('workerPhone', $event, 'phone')">
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label>철도운행안전관리자</label>
                                 <div class="pair-input">
-                                    <input type="text" id="ta-safety-name" placeholder="이름">
-                                    <input type="text" id="ta-safety-phone" placeholder="연락처">
+                                    <input type="text" id="ta-safety-name" placeholder="이름" v-model="track.form.safetyName">
+                                    <input type="text" id="ta-safety-phone" placeholder="연락처" v-model="track.form.safetyPhone"
+                                        @input="formatField('safetyPhone', $event, 'phone')">
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label>감독자</label>
                                 <div class="pair-input">
-                                    <input type="text" id="ta-supervisor-name" placeholder="이름">
+                                    <input type="text" id="ta-supervisor-name" placeholder="이름" v-model="track.form.supervisorName">
                                     <input type="text" id="ta-supervisor-id" maxlength="6"
-                                        oninput="this.value=this.value.replace(/[^0-9]/g,'');" placeholder="사번">
+                                        v-model="track.form.supervisorId" @input="digitsOnly('supervisorId', $event)" placeholder="사번">
                                 </div>
                             </div>
                         </div>
@@ -538,22 +584,26 @@
                             <div class="form-group">
                                 <label>작업시간 (시작 ~ 종료)</label>
                                 <div class="pair-input">
-                                    <input type="text" id="ta-work-start" placeholder="HH:mm">
+                                    <input type="text" id="ta-work-start" placeholder="HH:mm" v-model="track.form.workStart"
+                                        @input="formatField('workStart', $event, 'time')">
                                     <span class="tilde">~</span>
-                                    <input type="text" id="ta-work-end" placeholder="HH:mm">
+                                    <input type="text" id="ta-work-end" placeholder="HH:mm" v-model="track.form.workEnd"
+                                        @input="formatField('workEnd', $event, 'time')">
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label>운행시간 (시작 ~ 종료)</label>
                                 <div class="pair-input">
-                                    <input type="text" id="ta-op-start" placeholder="HH:mm">
+                                    <input type="text" id="ta-op-start" placeholder="HH:mm" v-model="track.form.opStart"
+                                        @input="formatField('opStart', $event, 'time')">
                                     <span class="tilde">~</span>
-                                    <input type="text" id="ta-op-end" placeholder="HH:mm">
+                                    <input type="text" id="ta-op-end" placeholder="HH:mm" v-model="track.form.opEnd"
+                                        @input="formatField('opEnd', $event, 'time')">
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label>호선</label>
-                                <select id="ta-line">
+                                <select id="ta-line" v-model="track.form.line">
                                     <option value="1">1호선</option>
                                     <option value="2">2호선</option>
                                     <option value="3">3호선</option>
@@ -567,7 +617,7 @@
                             </div>
                             <div class="form-group">
                                 <label>선로구분</label>
-                                <select id="ta-track-type">
+                                <select id="ta-track-type" v-model="track.form.trackType">
                                     <option value="1">일반</option>
                                     <option value="2">하행선</option>
                                     <option value="3">하행유치선</option>
@@ -591,19 +641,19 @@
                             </div>
                             <div class="form-group">
                                 <label>선로차단여부</label>
-                                <select id="ta-track-cutoff">
-                                    <option value="N">N</option>
-                                    <option value="Y">Y</option>
+                                <select id="ta-track-cutoff" v-model="track.form.trackCutoff">
+                                    <option :value="false">N</option>
+                                    <option :value="true">Y</option>
                                 </select>
                             </div>
                             <div class="form-group">
                                 <label>철도운행협의서 No.</label>
-                                <input type="text" id="ta-agreement-no" placeholder="번호 입력">
+                                <input type="text" id="ta-agreement-no" placeholder="번호 입력" v-model="track.form.agreementNo">
                             </div>
                             <div class="sub-group">
                                 <label class="sub-label">총원 (인원 구성)</label>
                                 <div class="pair-input">
-                                    <input type="number" id="ta-total-count" placeholder="0">
+                                    <input type="number" id="ta-total-count" placeholder="0" v-model="track.form.totalCount">
                                     <div class="read-only-text" id="ta-others-text">명</div>
                                 </div>
                             </div>
@@ -616,11 +666,11 @@
                         <div style="margin-right: auto;">
                             <label class="checkbox-label" style="display:flex; align-items:center; gap:8px;">
                                 <span style="font-size:13px; color:#666;">출입역 입력 : </span>
-                                <input type="checkbox" id="ta-station-input">
+                                <input type="checkbox" id="ta-station-input" v-model="track.form.stationInput">
                                 <span style="font-size:13px; color:#666;">작업역 구간과 동일</span>
                             </label>
                         </div>
-                        <button class="primary-btn large-btn" onclick="runTrackAccessTask()">시작</button>
+                        <button class="primary-btn large-btn" @click="runTask">시작</button>
                     </div>
                 </div>
             </div>
@@ -1027,26 +1077,35 @@
             </div>
         </div>
     </div>
-    <!-- ERP Worker Selection Modal -->
-    <div id="erp-worker-modal" class="modal-overlay" style="display: none;">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>점검자 선택</h3>
-                <button class="close-btn-icon" onclick="closeERPWorkerModal()">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div id="erp-worker-list" class="worker-list-grid">
-                    <!-- Dynamic Content -->
+    <!-- ERP Individual Worker Selection Modal -->
+    <div id="erp-worker-modal">
+        <div class="modal-overlay" v-show="isOpen" v-cloak>
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>점검자 선택</h3>
+                    <button class="close-btn-icon" @click="closeModal">&times;</button>
                 </div>
-                <div class="modal-option-row">
-                    <span>점검자 입력형식</span>
-                    <button id="btn-erp-modal-toggle" class="text-toggle-btn" onclick="toggleModalWorkerFormat()">
-                        대표자 외 0명
-                    </button>
+                <div class="modal-body">
+                    <div id="erp-worker-list" class="worker-list-grid">
+                        <div v-if="workers.length === 0" class="erp-worker-empty">
+                            점검자 목록이 없습니다.<br>설정에서 작업자를 추가해주세요.
+                        </div>
+                        <div v-for="worker in workers" :key="worker.id" class="worker-checkbox-item">
+                            <label class="erp-worker-label">
+                                <input type="checkbox" :id="'chk-erp-' + worker.id" :value="worker.id"
+                                    v-model="selectedWorkerIds">
+                                <span>{{ worker.name }}</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="modal-option-row">
+                        <span>점검자 입력형식</span>
+                        <button id="btn-erp-modal-toggle" class="text-toggle-btn" @click="toggleFormat">{{ buttonText }}</button>
+                    </div>
                 </div>
-            </div>
-            <div class="modal-footer">
-                <button class="primary-btn full-width" onclick="submitERPTask()">확인</button>
+                <div class="modal-footer">
+                    <button class="primary-btn full-width" @click="submitTask">확인</button>
+                </div>
             </div>
         </div>
     </div>

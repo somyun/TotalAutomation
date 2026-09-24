@@ -630,6 +630,10 @@ h1 {
 }
 
 /* ERP Compact Layout (4-Column) */
+[v-cloak] {
+    display: none !important;
+}
+
 .erp-container {
     display: flex;
     flex-direction: column;
@@ -748,6 +752,18 @@ h1 {
     font-weight: bold;
     border-color: var(--primary-color);
     box-shadow: 0 2px 5px rgba(76, 175, 80, 0.3);
+}
+
+#erp-individual-container .order-check-mark {
+    color: #00C853;
+    margin-right: 5px;
+    font-weight: bold;
+}
+
+#erp-individual-container .status-dot {
+    font-size: 1.2em;
+    margin-left: 5px;
+    font-weight: bold;
 }
 
 
@@ -1011,6 +1027,31 @@ input:checked+.slider:before {
 
 .worker-checkbox-item:hover {
     background-color: #f5f5f5;
+}
+
+.erp-worker-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    color: black;
+    cursor: pointer;
+}
+
+.erp-worker-label span {
+    font-size: 14px;
+    margin-top: 1px;
+}
+
+.erp-worker-label input {
+    accent-color: #4CAF50;
+}
+
+.erp-worker-empty {
+    grid-column: 1 / -1;
+    padding: 20px;
+    color: #999;
+    text-align: center;
 }
 
 .worker-checkbox-item input[type="checkbox"] {

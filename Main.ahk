@@ -47,20 +47,21 @@ SetTitleMatchMode 2
 ; ==============================================================================
 ; 컴파일러 지시문
 ; ==============================================================================
-;@Ahk2Exe-SetVersion 3.5.71.0
-;@Ahk2Exe-SetProductVersion v3.5.71
+;@Ahk2Exe-SetVersion 3.5.72.0
+;@Ahk2Exe-SetProductVersion v3.5.72
 ;@Ahk2Exe-SetDescription 통합자동화
 ; ==============================================================================
 ; ==============================================================================
 ; 초기화
 ; ==============================================================================
-global AppVersion := "v3.5.71"
+global AppVersion := "v3.5.72"
 global wvc := ""
 global wv := ""
 global MainGui := ""
 global LoadingGui := ""
 global SettingsConfirmGui := ""
 global SettingsConfirmRequestId := ""
+global PendingAutoWorkerImport := 0
 
 if !ConfigManager.Load()
     ExitApp
@@ -1233,6 +1234,8 @@ AutoRefreshERPOrder() {
 ; 로그인 세션 확보 후 작업자 명단 1회 조회
 ; ------------------------------------------------------------------------------
 AutoImportWorkersOnLogin(session) {
+    global PendingAutoWorkerImport
+
     employeeId := session.EmployeeId
     if (ConfigManager.GetCurrentUserID() != employeeId)
         return
@@ -1245,8 +1248,27 @@ AutoImportWorkersOnLogin(session) {
         return
     }
 
-    ; 세션 준비 콜백이 끝난 뒤 조회한다.
-    SetTimer(() => ImportWorkersAndNotify(arbpl, true, employeeId), -1)
+    ; SessionManager가 근태 조회를 끝낸 뒤 실행할 수 있도록 요청만 보관한다.
+    PendingAutoWorkerImport := {Arbpl: arbpl, EmployeeId: employeeId}
+    LogDebug("[작업자] 로그인 후 자동 조회 예약 (사번: " employeeId ")")
+}
+
+RunPendingAutoImportWorkers(session) {
+    global PendingAutoWorkerImport
+
+    if !IsObject(PendingAutoWorkerImport)
+        return
+
+    pending := PendingAutoWorkerImport
+    PendingAutoWorkerImport := 0
+    if (pending.EmployeeId != session.EmployeeId
+        || ConfigManager.GetCurrentUserID() != session.EmployeeId) {
+        LogDebug("[작업자] 로그인 사용자가 변경되어 예약된 자동 조회를 취소함")
+        return
+    }
+
+    ; RequestGuntaeData가 완료된 뒤 다음 AHK 실행 기회에 작업자 조회를 시작한다.
+    SetTimer(() => ImportWorkersAndNotify(pending.Arbpl, true, pending.EmployeeId), -1)
 }
 
 ImportWorkersAndNotify(arbpl, automatic := false, employeeId := "") {
@@ -1309,6 +1331,8 @@ RequestGuntaeData() {
             payload := Map("type", "updateGuntae", "data", guntaeResult)
             wv.PostWebMessageAsJson(JSON.stringify(payload))
             LogDebug("[근태] UI에 데이터 전송 완료 (" guntaeResult.Length "명)")
+        } else {
+            LogDebug("[근태] 조회 결과가 비어 있어 UI에 전송하지 않음")
         }
     } catch as e {
         LogDebug("[근태] 조회 실패: " e.Message)

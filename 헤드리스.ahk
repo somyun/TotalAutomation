@@ -381,6 +381,8 @@ class HeadlessAutomation {
         result := []
         try {
             data := JSON.parse(responseText)
+            if !(data is Array)
+                throw Error("근태 서버가 JSON 배열 대신 다른 형식의 응답을 반환했습니다.")
             for item in data {
                 result.Push(Map(
                     "SABUN", item.Has("SABUN") ? item["SABUN"] : "",
@@ -392,6 +394,7 @@ class HeadlessAutomation {
             this._Log("근태 조회 완료: " result.Length "명")
         } catch as e {
             this._Log("근태 파싱 오류: " e.Message)
+            throw e
         }
 
         return result

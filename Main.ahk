@@ -38,6 +38,7 @@ SetTitleMatchMode 2
 #Include "URL.ahk"
 #Include "선로출입.ahk"
 #Include "승인정보조회.ahk"
+#Include "철도운행협의서조회.ahk"
 #Include "차량일지.ahk"
 #Include "업무일지.ahk"
 #Include "ERP점검.ahk"
@@ -47,14 +48,14 @@ SetTitleMatchMode 2
 ; ==============================================================================
 ; 컴파일러 지시문
 ; ==============================================================================
-;@Ahk2Exe-SetVersion 3.5.72.0
-;@Ahk2Exe-SetProductVersion v3.5.72
+;@Ahk2Exe-SetVersion 3.5.80.0
+;@Ahk2Exe-SetProductVersion v3.5.80
 ;@Ahk2Exe-SetDescription 통합자동화
 ; ==============================================================================
 ; ==============================================================================
 ; 초기화
 ; ==============================================================================
-global AppVersion := "v3.5.72"
+global AppVersion := "v3.5.80"
 global wvc := ""
 global wv := ""
 global MainGui := ""
@@ -537,6 +538,53 @@ OnWebMessage(sender, args) {
             payload := Map("type", "confirmMsgboxResult", "requestId", requestId, "confirmed", confirmed)
             wv.PostWebMessageAsJson(JSON.stringify(payload))
         }
+    }
+    else if (command == "loadTrackAgreement") {
+        participants := msg.Has("participants") ? msg["participants"] : []
+        try {
+            targetDate := FormatTime(DateAdd(A_Now, 1, "Days"), "yyyyMMdd")
+            matches := TrackAgreementService.FindMatches(participants, targetDate)
+            if (matches.Length = 0)
+                throw Error("내일 날짜에 해당하고 협의서의 모든 작업관계자가 현재 입력된 이름에 포함되는 철도운행협의서를 찾지 못했습니다.")
+
+            selectedNo := ""
+            for index, agreement in matches {
+                message := "협의번호: " agreement["AgreementNo"]
+                    . "`n작업명: " agreement["WorkName"]
+                    . "`n작업기간: " agreement["WorkPeriod"]
+                    . "`n작업구간: " agreement["WorkSection"]
+                    . "`n작업관계자: " agreement["Participants"]
+                    . "`n작업인원: " agreement["EmployeeCount"]
+                    . "`n`n이 협의서가 맞습니까?"
+                title := "철도운행협의서 확인"
+                if (matches.Length > 1)
+                    title .= " (" index "/" matches.Length ")"
+                if (MsgBox(message, title, "YesNo Icon?") = "Yes") {
+                    selectedNo := agreement["AgreementNo"]
+                    break
+                }
+            }
+
+            payload := Map("type", "trackAgreementResult")
+            if (selectedNo != "")
+                payload["value"] := selectedNo
+            else
+                payload["error"] := "선택한 철도운행협의서가 없습니다."
+            wv.PostWebMessageAsJson(JSON.stringify(payload))
+        } catch as err {
+            LogDebug("철도운행협의서 불러오기 실패: " err.Message)
+            payload := Map("type", "trackAgreementResult", "error", err.Message)
+            wv.PostWebMessageAsJson(JSON.stringify(payload))
+        }
+    }
+    else if (command == "confirmTrackAgreementRenewal") {
+        confirmed := MsgBox(
+            "협의번호 갱신이 필요합니다. 다음달 협의번호를 불러올까요?",
+            "철도운행협의서 갱신",
+            "OKCancel Icon?"
+        ) = "OK"
+        payload := Map("type", "trackAgreementRenewalConfirmResult", "confirmed", confirmed)
+        wv.PostWebMessageAsJson(JSON.stringify(payload))
     }
     else if (command == "deleteUser") { ; 유저 삭제
         if (msg.Has("id")) {
@@ -1297,22 +1345,37 @@ ImportWorkersAndNotify(arbpl, automatic := false, employeeId := "") {
 ; ------------------------------------------------------------------------------
 ; 근태 조회 (세션 확보 후 자동 실행)
 ; ------------------------------------------------------------------------------
+SendGuntaeStatus(status) {
+    global wv
+    if wv {
+        payload := Map("type", "updateGuntaeStatus", "status", status)
+        wv.PostWebMessageAsJson(JSON.stringify(payload))
+    }
+}
+
 RequestGuntaeData() {
     global wv
     try {
+        SendGuntaeStatus("loading")
+
         uid := ConfigManager.GetCurrentUserID()
-        if (uid == "")
+        if (uid == "") {
+            SendGuntaeStatus("failure")
             return
+        }
 
         userRoot := ConfigManager.GetUserRoot(uid)
-        if (!userRoot.Has("profile"))
+        if (!userRoot.Has("profile")) {
+            SendGuntaeStatus("failure")
             return
+        }
 
         profile := userRoot["profile"]
         codeVal := profile.Has("codeval") ? profile["codeval"] : ""
 
         if (codeVal == "") {
             LogDebug("[근태] codeval 미설정 - 근태조회 건너뜀")
+            SendGuntaeStatus("failure")
             return
         }
 
@@ -1333,8 +1396,10 @@ RequestGuntaeData() {
             LogDebug("[근태] UI에 데이터 전송 완료 (" guntaeResult.Length "명)")
         } else {
             LogDebug("[근태] 조회 결과가 비어 있어 UI에 전송하지 않음")
+            SendGuntaeStatus("failure")
         }
     } catch as e {
         LogDebug("[근태] 조회 실패: " e.Message)
+        SendGuntaeStatus("failure")
     }
 }

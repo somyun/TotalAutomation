@@ -475,6 +475,10 @@ class SessionAuthenticator {
         if InStr(StrLower(portalCheck.Url), "/user/login")
             throw Error("포털 세션이 만료되었습니다.")
 
+        ; /portal/은 열리더라도 업무 포털 세션이 부분 만료되어 근태 AJAX 요청만
+        ; '로그 아웃' HTML을 반환할 수 있다. 실제 근태 API까지 JSON 응답인지 확인한다.
+        this.ValidateGuntaeSession(session)
+
         misResponse := session.Request("POST", this.BaseMis "/ssoLogin.do",
             XPlatformProtocol.BuildSsoLoginXml(employeeId),
             Map("Content-Type", "text/xml;charset=UTF-8"))
@@ -489,6 +493,29 @@ class SessionAuthenticator {
             || InStr(epText, "name='j_password'")
             throw Error("EP 세션이 만료되었습니다.")
         session.EmployeeId := employeeId
+        return true
+    }
+
+    static ValidateGuntaeSession(session) {
+        url := this.BasePortal "/main/getDeptDetail.face"
+        today := FormatTime(A_Now, "yyyy-MM-dd")
+        payload := JSON.stringify(Map("codeVal", "0", "dateVal", today))
+        response := session.Request("POST", url, payload, Map(
+            "Accept", "application/json, text/javascript, */*; q=0.01",
+            "Content-Type", "application/json; charset=UTF-8",
+            "X-Requested-With", "XMLHttpRequest",
+            "Origin", this.BasePortal,
+            "Referer", this.BasePortal "/main/Geuntae.face"
+        ))
+
+        if RegExMatch(response.Text, "i)<title[^>]*>\s*로그\s*아웃\s*</title>")
+            throw Error("근태 포털 세션이 만료되었습니다.")
+
+        try data := JSON.parse(response.Text)
+        catch as err
+            throw Error("근태 포털 세션이 JSON 응답을 반환하지 않았습니다: " err.Message)
+        if !(data is Array)
+            throw Error("근태 포털 세션 검증 응답 형식이 올바르지 않습니다.")
         return true
     }
 

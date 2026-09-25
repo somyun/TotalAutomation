@@ -203,6 +203,8 @@ class SessionManager {
         text := response.Text
         if RegExMatch(text, "i)<Parameter[^>]+id=.ErrorCode.[^>]*>\s*-99999")
             return true
+        if RegExMatch(text, "i)<title[^>]*>\s*로그\s*아웃\s*</title>")
+            return true
         if InStr(lowerUrl, "ep.humetro.busan.kr") {
             lowerText := StrLower(text)
             if InStr(lowerText, 'name="j_password"') || InStr(lowerText, "name='j_password'")

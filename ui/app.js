@@ -8,6 +8,7 @@ let isWorkLogInitialized = false; // Flag for persistence
 let pendingRestoreState = null; // State waiting for config load
 let currentSafetyEduData = {}; // [New] Store for Safety Edu Presets
 let guntaeData = null; // 근태 조회 결과 캐시
+let guntaeStatus = 'idle'; // idle, loading, success, failure
 let configReadyUserId = null;
 let pendingAutoWorkerList = null;
 
@@ -114,9 +115,11 @@ function startERPFormListRealtime() {
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
+    initWorkLogApp();
     initERPIndividualApp();
     initERPWorkerModalApp();
     initTrackAccessApp();
+    initVehicleLogApp();
 
     // Initial Nav Setup
     switchMainTab('view-work-log');
@@ -167,14 +170,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
         }
-    });
-
-    // [New] Auto-formatting for Time and Phone inputs
-    const timeInputs = ['vl-start-time', 'vl-end-time'];
-
-    timeInputs.forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.addEventListener('input', (e) => formatTime(e.target));
     });
 
     // ERP Check Order Number Restriction (Dynamic elements handled elsewhere or if static)
@@ -288,6 +283,9 @@ function handleAhkMessage(msg) {
             break;
         case 'loadConfig':
             appConfig = msg.data;
+            // trackAccessApp은 설정 수신 전에 마운트되므로 작업자 목록 computed가
+            // 최초 빈 값을 계속 캐시하지 않도록 명시적으로 갱신 신호를 보낸다.
+            trackAccessState.workerListRevision += 1;
             configReadyUserId = selectedUserId;
             initPresets(); // Initialize Presets for Track/Vehicle Views
             if (document.getElementById('settings-view').style.display !== 'none') {
@@ -334,9 +332,9 @@ function handleAhkMessage(msg) {
             break;
         case 'approvalInfo':
             if (msg.data) {
-                setVal('vl-approve-no', msg.data.승인번호);
-                setVal('vl-dept', msg.data.승인부서);
-                setVal('vl-approver', msg.data.승인자);
+                vehicleLogState.form.approveNo = String(msg.data.승인번호 || '');
+                vehicleLogState.form.dept = String(msg.data.승인부서 || '');
+                vehicleLogState.form.approver = String(msg.data.승인자 || '');
             } else {
                 showNativeMsgBox(msg.error || "승인정보를 불러오지 못했습니다.");
             }
@@ -354,6 +352,9 @@ function handleAhkMessage(msg) {
             guntaeData = msg.data;
             applyGuntaeData(msg.data);
             break;
+        case 'updateGuntaeStatus':
+            updateGuntaeStatusLabel(msg.status);
+            break;
         case 'updateWorkerList':
             if (msg.automatic) {
                 pendingAutoWorkerList = msg;
@@ -367,20 +368,16 @@ function handleAhkMessage(msg) {
             handleLocationListUpdate(msg.data);
             break;
         case 'updateAgreementNo':
-            if (msg.value) {
-                trackAccessState.form.agreementNo = msg.value;
-                // 현재 선택된 프리셋에 자동 저장
-                const presetKey = trackAccessState.selectedPreset;
-                if (presetKey && presetKey !== '__NEW__') {
-                    const presets = getUserPresets('track');
-                    if (presets[presetKey]) {
-                        presets[presetKey].agreementNo = msg.value;
-                        presets[presetKey].agreementNoDate = new Date().toISOString().slice(0, 10);
-                        saveUserPresets('track', presets);
-                        syncTrackPresets();
-                    }
-                }
-            }
+            applyTrackAgreementNo(msg.value);
+            break;
+        case 'trackAgreementResult':
+            trackAccessState.agreementLoading = false;
+            if (msg.value) applyTrackAgreementNo(msg.value);
+            if (msg.error) showNativeMsgBox(msg.error, '철도운행협의서 불러오기');
+            break;
+        case 'trackAgreementRenewalConfirmResult':
+            trackAccessState.renewalConfirmPending = false;
+            if (msg.confirmed) requestTrackAgreement();
             break;
         case 'showInitOverlay':
             // [New] 초기화 오버레이 표시
@@ -541,6 +538,8 @@ function collectUiState() {
     // Vue가 관리하는 화면은 DOM이 아니라 반응형 원본 상태를 직접 저장합니다.
     state.customState.erpCheck = collectERPRecoveryState();
     state.customState.trackAccess = collectTrackAccessRecoveryState();
+    state.customState.workLog = collectWorkLogRecoveryState();
+    state.customState.vehicleLog = collectVehicleLogRecoveryState();
 
     return state;
 }
@@ -558,6 +557,8 @@ function restoreUiStateData(state) {
     if (!state) return;
 
     const hasTrackAccessSnapshot = !!state.customState?.trackAccess?.form;
+    const hasWorkLogSnapshot = !!state.customState?.workLog;
+    const hasVehicleLogSnapshot = !!state.customState?.vehicleLog?.form;
 
     // 1. Restore View
     if (state.activeView) {
@@ -577,6 +578,8 @@ function restoreUiStateData(state) {
             if (!el) return;
             // 새 복구 형식에서는 선로출입 Vue 상태를 아래에서 한 번에 직접 적용합니다.
             if (hasTrackAccessSnapshot && el.closest('#view-track-access')) return;
+            if (hasWorkLogSnapshot && el.closest('#view-work-log')) return;
+            if (hasVehicleLogSnapshot && el.closest('#view-vehicle-log')) return;
 
             // 타입 검사 등 안전장치
             if (el.type === 'checkbox') {
@@ -609,6 +612,8 @@ function restoreUiStateData(state) {
 
         restoreERPRecoveryState(state.customState.erpCheck);
         restoreTrackAccessRecoveryState(state.customState.trackAccess);
+        restoreWorkLogRecoveryState(state.customState.workLog);
+        restoreVehicleLogRecoveryState(state.customState.vehicleLog);
     }
 
 }
@@ -634,6 +639,8 @@ function switchMainTab(viewId) {
     if (viewId === 'view-track-access') {
         // 프리셋 데이터는 탭 진입 시점에만 현재 UI로 다시 적용합니다.
         syncTrackPresets(true);
+    } else if (viewId === 'view-vehicle-log') {
+        syncVehiclePresets(true);
     } else if (viewId === 'view-erp-check') {
         // Apply User Preference for Inspector Format
         // Logic: If user has a specific preference, override the current state?
@@ -661,12 +668,8 @@ function switchMainTab(viewId) {
             btnRefresh.click();
         }
     } else if (viewId === 'view-work-log') {
-        // Only render if NOT initialized yet (Persistence Fix)
         if (!isWorkLogInitialized) {
             renderWorkLogUI();
-        } else {
-            // 이미 초기화된 경우 통합 UI 갱신 함수 호출
-            refreshUI();
         }
     }
 }
@@ -931,6 +934,11 @@ function handleLoginSuccess(profile) {
     if (titleEl) titleEl.innerText = `통합자동화 - ${profile.name}`;
 
     // Set selectedUserId to current logged in user to ensure settings load correct user profile
+    if (workLogState.ownerId !== null && String(workLogState.ownerId) !== String(profile.id)) {
+        guntaeData = null;
+        guntaeStatus = 'idle';
+        workLogState.guntaeStatus = 'idle';
+    }
     selectedUserId = profile.id;
 
     // Request full config
@@ -2321,424 +2329,329 @@ function initERPBatchModalApp() {
 
 
 
-// --- Work Log Logic ---
-function renderWorkLogUI() {
-    const uid = selectedUserId;
-    if (!uid || !appConfig.users || !appConfig.users[uid]) return;
+// --- Work Log Logic (Vue) ---
+const workLogState = Vue.reactive({
+    workType: 'day',
+    options: {
+        makeLog: true,
+        general: true,
+        safe: true,
+        driving: false,
+        drink: false,
+        drinkCalibration: false
+    },
+    safety: [
+        { content: '', date: '', start: '', end: '' },
+        { content: '', date: '', start: '', end: '' }
+    ],
+    workers: [],
+    guntaeStatus: 'idle',
+    ownerId: null
+});
 
-    // 1. Determine Work Type (Day/Night) based on Time
-    const now = new Date();
-    const dayOfWeek = now.getDay(); // 0=Sun, 6=Sat
-    const hours = now.getHours();
-    const minutes = now.getMinutes();
-    const timeVal = hours * 100 + minutes;
+function collectWorkLogRecoveryState() {
+    return {
+        workType: workLogState.workType,
+        options: { ...workLogState.options },
+        safety: workLogState.safety.map(row => ({ ...row })),
+        workers: workLogState.workers.map(worker => ({
+            id: worker.id,
+            attend: !!worker.attend,
+            reason: worker.reason || '',
+            driverRole: worker.driverRole || '',
+            wasChecked: worker.wasChecked !== false
+        })),
+        guntaeStatus: workLogState.guntaeStatus
+    };
+}
 
-    // Logic: Day if Mon-Fri (1-5) AND 08:30 <= Time < 17:30 [Legacy - Removed]
-    // Now handled entirely by updateShiftUI logic via AHK broadcast.
-
-    // 2. Render Worker List (Must be before handleWorkTypeChange for uncheck logic to work)
+function restoreWorkLogRecoveryState(savedState) {
+    if (!savedState || typeof savedState !== 'object') return;
     renderWorkLogWorkerList();
 
-    // 3. Apply Automation Options based on Work Type
-    handleWorkTypeChange(false); // Validates and sets checkboxes
+    workLogState.workType = savedState.workType === 'night' ? 'night' : 'day';
+    if (savedState.options) {
+        Object.keys(workLogState.options).forEach(key => {
+            if (savedState.options[key] !== undefined) {
+                workLogState.options[key] = !!savedState.options[key];
+            }
+        });
+    }
+    if (Array.isArray(savedState.safety)) {
+        workLogState.safety.forEach((row, index) => {
+            const saved = savedState.safety[index] || {};
+            row.content = String(saved.content || '');
+            row.date = String(saved.date || '');
+            row.start = String(saved.start || '');
+            row.end = String(saved.end || '');
+        });
+    }
 
-    // 3. Initialize Safety Log Dates (Legacy Logic: -510 mins for Day shift boundary)
-    const adjDate = new Date(Date.now() - 510 * 60000);
-    const yyyy = adjDate.getFullYear();
-    const mm = String(adjDate.getMonth() + 1).padStart(2, '0');
-    const dd = String(adjDate.getDate()).padStart(2, '0');
-    const dateStr = `${yyyy}${mm}${dd}`;
+    const savedWorkers = new Map(
+        (Array.isArray(savedState.workers) ? savedState.workers : [])
+            .map(worker => [String(worker.id), worker])
+    );
+    workLogState.workers.forEach(worker => {
+        const saved = savedWorkers.get(String(worker.id));
+        if (!saved) return;
+        worker.attend = !!saved.attend;
+        worker.reason = String(saved.reason || '');
+        worker.driverRole = String(saved.driverRole || '');
+        worker.wasChecked = saved.wasChecked !== false;
+    });
+    updateGuntaeStatusLabel(savedState.guntaeStatus || 'idle');
+}
 
+function initWorkLogApp() {
+    Vue.createApp({
+        data() {
+            return { work: workLogState };
+        },
+        methods: {
+            changeWorkType() {
+                handleWorkTypeChange();
+            },
+            toggleDrink() {
+                toggleDrinkCalibration();
+            },
+            workerNoteChanged(worker) {
+                if (worker.reason.trim() !== '' && worker.reason !== '일근') {
+                    worker.attend = false;
+                    worker.driverRole = '';
+                }
+                updateWorkerStats();
+            },
+            workerAttendanceChanged(worker) {
+                if (!worker.attend) worker.driverRole = '';
+                updateWorkerStats();
+            },
+            formatSafetyTime(index, field, event) {
+                this.work.safety[index][field] = formatTimeValue(event.target.value);
+            },
+            startTask: startWorkLog
+        }
+    }).mount('#view-work-log');
+}
+
+function workLogDateText(date) {
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    return `${yyyy}${mm}${dd}`;
+}
+
+function applyWorkLogSafetyDefaults() {
+    const user = appConfig.users?.[selectedUserId];
+    const safetyPresets = user?.dailyLogDefaults?.safety || [];
+    const now = new Date();
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const indexes = workLogState.workType === 'day' ? [0, 1] : [2, 3];
+    const dates = workLogState.workType === 'day'
+        ? [workLogDateText(now), workLogDateText(now)]
+        : [workLogDateText(now), workLogDateText(tomorrow)];
+
+    workLogState.safety.forEach((row, index) => {
+        const preset = safetyPresets[indexes[index]] || {};
+        row.content = String(preset.content || '');
+        row.start = String(preset.start || '');
+        row.end = String(preset.end || '');
+        row.date = dates[index];
+    });
+}
+
+function renderWorkLogUI() {
+    const uid = selectedUserId;
+    if (!uid || !appConfig.users?.[uid]) return;
+    if (workLogState.ownerId !== uid) {
+        Object.assign(workLogState.options, {
+            makeLog: true,
+            general: true,
+            safe: true,
+            driving: false,
+            drink: false,
+            drinkCalibration: false
+        });
+        workLogState.workers = [];
+        updateGuntaeStatusLabel('idle');
+    }
+    renderWorkLogWorkerList();
+    handleWorkTypeChange(false);
     isWorkLogInitialized = true;
 }
 
-function handleWorkTypeChange(skipRenderWorkers = true) {
-    const isDay = document.querySelector('input[name="work-type"][value="day"]').checked;
-
-    // Checkboxes
-    const chkMakeLog = document.getElementById('chk-make-log');
-    const chkGeneral = document.getElementById('chk-general');
-    const chkSafe = document.getElementById('chk-safe-manage');
-    const chkDriving = document.getElementById('chk-driving');
-    const chkDrink = document.getElementById('chk-drink');
-    const chkCal = document.getElementById('chk-drink-cal');
-
+function handleWorkTypeChange() {
+    const isDay = workLogState.workType === 'day';
     if (isDay) {
-        // Day Mode
-        chkMakeLog.checked = true;
-        chkMakeLog.disabled = false;
-
-        chkDriving.checked = false;
-        chkDriving.disabled = true; // Disabled for Day
-
-        chkDrink.disabled = false; // Enabled for Day
-
-        // Calibration check state depends on Drink check
-        if (chkDrink.checked) {
-            chkCal.disabled = false;
-        } else {
-            chkCal.disabled = true;
-        }
-
+        workLogState.options.makeLog = true;
+        workLogState.options.driving = false;
+        if (!workLogState.options.drink) workLogState.options.drinkCalibration = false;
     } else {
-        // Night Mode
-        chkMakeLog.checked = false;
-        chkMakeLog.disabled = true; // Disabled for Night
-
-        chkDriving.checked = true;
-        chkDriving.disabled = false;
-
-        chkDrink.disabled = true;
-        chkDrink.checked = false;
-        chkCal.disabled = true;
-        chkCal.checked = false;
+        workLogState.options.makeLog = false;
+        workLogState.options.driving = true;
+        workLogState.options.drink = false;
+        workLogState.options.drinkCalibration = false;
     }
 
-    // 주간/야간 모드에 따른 일근자 상태 업데이트 (근태 데이터 최우선 참조)
     updateDayShiftWorkers(isDay);
-
-    enableDriverSelects(!isDay);
-
-    // Toggle Driver Column Visibility
-    const drvHeader = document.getElementById('col-header-drive');
-    if (drvHeader) {
-        if (isDay) {
-            drvHeader.classList.add('hidden-col');
-        } else {
-            drvHeader.classList.remove('hidden-col');
-        }
-    }
-
-    // Toggle Cells
-    document.querySelectorAll('.w-drive-cell').forEach(cell => {
-        if (isDay) {
-            cell.classList.add('hidden-col');
-        } else {
-            cell.classList.remove('hidden-col');
-        }
-    });
-
-    // --- [New] Apply Safety Management Presets & Dates ---
-    if (typeof appConfig !== 'undefined' && appConfig.users && typeof selectedUserId !== 'undefined' && appConfig.users[selectedUserId]) {
-        const user = appConfig.users[selectedUserId];
-        const defaults = user.dailyLogDefaults || {};
-        const safetyPresets = defaults.safety || []; // Array of 4 items
-
-        // Date Calculation
-        const now = new Date();
-        const yyyy = now.getFullYear();
-        const mm = String(now.getMonth() + 1).padStart(2, '0');
-        const dd = String(now.getDate()).padStart(2, '0');
-        const todayStr = `${yyyy}${mm}${dd}`;
-
-        const tmr = new Date(now);
-        tmr.setDate(tmr.getDate() + 1);
-        const t_yyyy = tmr.getFullYear();
-        const t_mm = String(tmr.getMonth() + 1).padStart(2, '0');
-        const t_dd = String(tmr.getDate()).padStart(2, '0');
-        const tomorrowStr = `${t_yyyy}${t_mm}${t_dd}`;
-
-        // Select Presets based on Mode
-        // Day: idx 0 (Morning), idx 1 (Afternoon)
-        // Night: idx 2 (Evening), idx 3 (Dawn)
-        let p1, p2;
-        let d1, d2;
-
-        if (isDay) {
-            p1 = safetyPresets[0] || {};
-            p2 = safetyPresets[1] || {};
-            d1 = todayStr;
-            d2 = todayStr;
-        } else {
-            p1 = safetyPresets[2] || {};
-            p2 = safetyPresets[3] || {};
-            d1 = todayStr;
-            d2 = tomorrowStr; // Dawn is next day
-        }
-
-        // Apply to Row 1
-        setVal('safe-content-1', p1.content || '');
-        setVal('safe-start-1', p1.start || '');
-        setVal('safe-end-1', p1.end || '');
-        setVal('safe-date-1', d1);
-
-        // Apply to Row 2
-        setVal('safe-content-2', p2.content || '');
-        setVal('safe-start-2', p2.start || '');
-        setVal('safe-end-2', p2.end || '');
-        setVal('safe-date-2', d2);
-    }
+    applyWorkLogSafetyDefaults();
 }
 
 function toggleDrinkCalibration() {
-    const chkDrink = document.getElementById('chk-drink');
-    const chkCal = document.getElementById('chk-drink-cal');
-    if (chkDrink.checked) {
-        chkCal.disabled = false;
-    } else {
-        chkCal.disabled = true;
-        chkCal.checked = false;
+    if (workLogState.workType === 'night' || !workLogState.options.drink) {
+        workLogState.options.drinkCalibration = false;
     }
 }
 
-// --- 근태 상태 파싱 헬퍼 함수 ---
 function parseGuntaeStatus(entry) {
     if (!entry) return { isAttending: false, reason: '' };
-    const worktime = (entry.WORKTIME || '').trim();
+    const worktime = String(entry.WORKTIME || '').trim();
     const guntaeName = entry.GUNTAENAME || '-';
-
-    if (guntaeName !== '-') {
-        return { isAttending: false, reason: guntaeName }; // 사유 있음 (휴가 등)
-    } else if (worktime !== '') {
-        return { isAttending: true, reason: '' }; // 정상 출근
-    } else {
-        return { isAttending: false, reason: '' }; // 비근무
-    }
+    if (guntaeName !== '-') return { isAttending: false, reason: guntaeName };
+    if (worktime !== '') return { isAttending: true, reason: '' };
+    return { isAttending: false, reason: '' };
 }
 
 function renderWorkLogWorkerList() {
-    const container = document.getElementById('work-log-worker-list');
-
-    // [State Preservation] 렌더링 전 현재 상태 저장 (체크박스, 휴가사유, 운전원 선택)
-    const savedState = {};
-    const existingRows = container.querySelectorAll('.worker-row');
-    existingRows.forEach(row => {
-        const workerId = row.dataset.id;
-        if (workerId) {
-            const chk = row.querySelector('.w-chk');
-            const note = row.querySelector('.w-note');
-            const drv = row.querySelector('.w-drive');
-            savedState[workerId] = {
-                checked: chk ? chk.checked : false,
-                note: note ? note.value : '',
-                driver: drv ? drv.value : ''
-            };
-        }
-    });
-
-    container.innerHTML = '';
-    // const countSpan = document.getElementById('worker-count'); // Removed
-
-    // Get Current User ID & Profile
     const uid = selectedUserId;
-    if (!uid || !appConfig.users || !appConfig.users[uid]) return;
-    const user = appConfig.users[uid];
+    const user = appConfig.users?.[uid];
+    if (!uid || !user) return;
 
-    // Use Global Colleagues
-    const allColleagues = appConfig.appSettings?.colleagues || [];
-    const myTeam = (user.profile && user.profile.team) ? user.profile.team : '';
+    const ownerChanged = workLogState.ownerId !== uid;
+    const existing = ownerChanged
+        ? new Map()
+        : new Map(workLogState.workers.map(worker => [String(worker.id), worker]));
+    const myTeam = user.profile?.team || '';
+    const workers = (appConfig.appSettings?.colleagues || [])
+        .filter(worker => worker.team === '일근' || (myTeam && worker.team === myTeam))
+        .sort((a, b) => {
+            if (a.isManager !== b.isManager) return b.isManager - a.isManager;
+            return String(a.id).localeCompare(String(b.id));
+        })
+        .map(worker => {
+            const saved = existing.get(String(worker.id));
+            if (saved) {
+                return {
+                    ...saved,
+                    id: worker.id,
+                    name: worker.name,
+                    team: worker.team,
+                    isManager: worker.isManager
+                };
+            }
 
-    // Filter: Same Team OR '일근'
-    const filteredWorkers = allColleagues.filter(w => {
-        if (w.team === '일근') return true;
-        if (myTeam && w.team === myTeam) return true;
-        return false;
-    });
-
-    // Sort: Manager First (isManager=1), then ID (asc)
-    const sortedWorkers = [...filteredWorkers].sort((a, b) => {
-        if (a.isManager !== b.isManager) return b.isManager - a.isManager; // 1 before 0
-        return a.id.localeCompare(b.id);
-    });
-
-    sortedWorkers.forEach((worker, index) => {
-        const row = document.createElement('div');
-        row.className = 'worker-row';
-        row.dataset.id = worker.id;
-        row.dataset.team = worker.team; // [중요] 근무조 데이터셋 추가
-        row.dataset.name = worker.name;
-        row.dataset.isManager = worker.isManager;
-
-        // [State Preservation] 저장된 상태가 있으면 사용, 없으면 guntaeData 또는 기본값
-        const saved = savedState[worker.id];
-        let isChecked = true;
-        let savedNote = '';
-        let savedDriver = '';
-
-        if (saved) {
-            isChecked = saved.checked;
-            savedNote = saved.note;
-            savedDriver = saved.driver;
-        } else if (guntaeData) {
-            // 근태 데이터가 있으면 적용
-            const entry = guntaeData.find(d => d.SABUN === worker.id);
+            let attend = true;
+            let reason = '';
+            const entry = Array.isArray(guntaeData)
+                ? guntaeData.find(item => String(item.SABUN) === String(worker.id))
+                : null;
             if (entry) {
                 const status = parseGuntaeStatus(entry);
-                isChecked = status.isAttending;
-                savedNote = status.reason;
+                attend = status.isAttending;
+                reason = status.reason;
             }
-        }
-
-        // Dynamic Driver Column
-        const isDay = document.querySelector('input[name="work-type"][value="day"]').checked;
-        const driveClass = isDay ? 'wl-drive hidden-col w-drive-cell' : 'wl-drive w-drive-cell';
-
-        row.innerHTML = `
-            <label class="wl-name checkbox-label" style="margin: 0;" for="chk-worker-${worker.id}">
-                <input type="checkbox" ${isChecked ? 'checked' : ''} class="w-chk" id="chk-worker-${worker.id}">
-                <span>${worker.name}</span>
-            </label>
-            <div class="wl-note"><input type="text" placeholder="사유" class="w-note" id="note-worker-${worker.id}"></div>
-            <div class="${driveClass}">
-                <select class="w-drive" disabled id="drv-worker-${worker.id}">
-                    <option value="">-</option>
-                    <option value="정" ${(savedDriver || worker.driverRole) === '정' ? 'selected' : ''}>정</option>
-                    <option value="부" ${(savedDriver || worker.driverRole) === '부' ? 'selected' : ''}>부</option>
-                    <option value="검사자" ${(savedDriver || worker.driverRole) === '검사자' ? 'selected' : ''}>검사자</option>
-                </select>
-            </div>
-        `;
-        container.appendChild(row);
-
-        // [State Preservation] 저장된 휴가사유 복원 (innerHTML 후에 설정하여 안전하게 처리)
-        const noteInput = row.querySelector('.w-note');
-        if (noteInput && savedNote) {
-            noteInput.value = savedNote;
-        }
-
-        // Add Listeners
-        const chk = row.querySelector('.w-chk');
-        const note = row.querySelector('.w-note');
-        const drv = row.querySelector('.w-drive');
-
-        // Logic: If Note has text (vacation), Uncheck.
-        note.addEventListener('input', () => {
-            if (note.value.trim() !== '' && note.value !== '일근') {
-                chk.checked = false;
-            } else {
-                // Optional: Re-check if cleared?
-                // chk.checked = true; 
-            }
-            updateWorkerStats();
+            return {
+                id: worker.id,
+                name: worker.name,
+                team: worker.team,
+                isManager: worker.isManager,
+                attend,
+                reason,
+                driverRole: worker.driverRole === '-' ? '' : String(worker.driverRole || ''),
+                wasChecked: attend
+            };
         });
 
-        chk.addEventListener('change', () => {
-            updateWorkerStats();
-            if (!chk.checked) drv.value = '';
-        });
-    });
-
-    // Initial Driver Enable Check
-    const isDay = document.querySelector('input[name="work-type"][value="day"]').checked;
-    enableDriverSelects(!isDay);
-
-    // 작업자 목록이 다시 렌더링되어도 이미 받은 근태 조회 상태를 유지한다.
-    updateGuntaeStatusLabel(Array.isArray(guntaeData) && guntaeData.length > 0);
+    workLogState.workers = workers;
+    workLogState.ownerId = uid;
+    updateGuntaeStatusLabel(guntaeStatus);
 }
 
-function updateGuntaeStatusLabel(completed) {
-    const statusLabel = document.getElementById('worker-search-status');
-    if (!statusLabel) return;
-    statusLabel.style.display = completed ? 'inline' : 'none';
-    if (completed) statusLabel.textContent = '근태조회완료';
+function updateGuntaeStatusLabel(status) {
+    if (status === true) status = 'success';
+    if (status === false) status = 'idle';
+    guntaeStatus = status || 'idle';
+    workLogState.guntaeStatus = guntaeStatus;
 }
 
-// 근태 조회 결과를 작업자 목록에 적용
 function applyGuntaeData(data) {
-    if (!data || !Array.isArray(data)) return;
-
-    const container = document.getElementById('work-log-worker-list');
-    if (!container) return;
-
-    const isDay = document.querySelector('input[name="work-type"][value="day"]').checked;
-
-    const rows = container.querySelectorAll('.worker-row');
-    rows.forEach(row => {
-        const workerId = row.dataset.id;
-        const entry = data.find(d => d.SABUN === workerId);
+    if (!Array.isArray(data)) return;
+    const isDay = workLogState.workType === 'day';
+    workLogState.workers.forEach(worker => {
+        const entry = data.find(item => String(item.SABUN) === String(worker.id));
         if (!entry) return;
-
-        const chk = row.querySelector('.w-chk');
-        const note = row.querySelector('.w-note');
-        if (!chk || !note) return;
-
-        if (!isDay && row.dataset.team === '일근') {
-            // 야간 근무 시 일근자는 근태와 무관하게 무조건 체크 해제 및 사유 비움
-            chk.checked = false;
-            note.value = '';
+        if (!isDay && worker.team === '일근') {
+            worker.attend = false;
+            worker.reason = '';
+            worker.driverRole = '';
         } else {
             const status = parseGuntaeStatus(entry);
-            chk.checked = status.isAttending;
-            note.value = status.reason;
+            worker.attend = status.isAttending;
+            worker.reason = status.reason;
+            if (!worker.attend) worker.driverRole = '';
         }
     });
-
-    // 상태 라벨 표시
-    updateGuntaeStatusLabel(data.length > 0);
-
+    updateGuntaeStatusLabel(data.length > 0 ? 'success' : 'failure');
     updateWorkerStats();
 }
 
-
-function enableDriverSelects(enable) {
-    document.querySelectorAll('.w-drive').forEach(el => {
-        el.disabled = !enable;
-    });
+function enableDriverSelects() {
+    // Vue 템플릿의 disabled 바인딩이 주야간 상태를 직접 반영합니다.
 }
 
 function toggleAllWorkers(mainChk) {
-    const chks = document.querySelectorAll('#work-log-worker-list .w-chk');
-    chks.forEach(c => c.checked = mainChk.checked);
+    const checked = !!mainChk?.checked;
+    workLogState.workers.forEach(worker => {
+        worker.attend = checked;
+        if (!checked) worker.driverRole = '';
+    });
     updateWorkerStats();
 }
 
 function updateWorkerStats() {
-    // Placeholder for stats logic
+    // 현재 화면에는 별도 통계 표시가 없습니다.
 }
 
 function startWorkLog() {
-    const uid = selectedUserId;
-    if (!uid) return;
-
-    const workType = document.querySelector('input[name="work-type"]:checked').value; // 'day' or 'night'
-
-    // Gather Options
-    const options = {
-        makeLog: document.getElementById('chk-make-log').checked,
-        general: document.getElementById('chk-general').checked,
-        safe: document.getElementById('chk-safe-manage').checked,
-        driving: document.getElementById('chk-driving').checked,
-        driving: document.getElementById('chk-driving').checked,
-        drink: document.getElementById('chk-drink').checked
-    };
-
-    // Gather Safety Data
+    if (!selectedUserId) return;
     const safetyData = {
-        content1: getVal('safe-content-1'),
-        date1: getVal('safe-date-1'),
-        start1: getVal('safe-start-1'),
-        end1: getVal('safe-end-1'),
-        content2: getVal('safe-content-2'),
-        date2: getVal('safe-date-2'),
-        start2: getVal('safe-start-2'),
-        end2: getVal('safe-end-2')
+        content1: workLogState.safety[0].content,
+        date1: workLogState.safety[0].date,
+        start1: workLogState.safety[0].start,
+        end1: workLogState.safety[0].end,
+        content2: workLogState.safety[1].content,
+        date2: workLogState.safety[1].date,
+        start2: workLogState.safety[1].start,
+        end2: workLogState.safety[1].end
     };
-
-    // Gather Workers
-    const workers = Array.from(document.querySelectorAll('.worker-row')).map(row => ({
-        name: row.dataset.name,
-        id: row.dataset.id,
-        attend: row.querySelector('.w-chk').checked,
-        reason: row.querySelector('.w-note').value,
-        driverRole: row.querySelector('.w-drive').value,
-        team: row.dataset.team,
-        boss: row.dataset.isManager
+    const workers = workLogState.workers.map(worker => ({
+        name: worker.name,
+        id: worker.id,
+        attend: worker.attend,
+        reason: worker.reason,
+        driverRole: worker.driverRole,
+        team: worker.team,
+        boss: worker.isManager
     }));
-
-    const payload = {
+    sendMessageToAHK({
         command: 'runTask',
         task: 'createWorkLog',
         data: {
-            workType,
-            options,
+            workType: workLogState.workType,
+            options: {
+                makeLog: workLogState.options.makeLog,
+                general: workLogState.options.general,
+                safe: workLogState.options.safe,
+                driving: workLogState.options.driving,
+                drink: workLogState.options.drink
+            },
+            chkDrinkDetectorCalibration: workLogState.options.drinkCalibration,
             safetyData,
             safetyEdu: currentSafetyEduData || {},
             workers
         }
-    };
-    sendMessageToAHK(payload);
+    });
 }
-
 
 // Global Exports
 window.switchMainTab = switchMainTab;
@@ -2824,72 +2737,38 @@ function updateShiftUI(shiftData) {
         document.getElementById('shift-next-date').textContent = "";
     }
 
-    // [New] Sync Work Log Radio Buttons
-    const radioVal = shiftData.isNight ? 'night' : 'day';
-    const radio = document.querySelector(`input[name="work-type"][value="${radioVal}"]`);
-    if (radio && !radio.checked) {
-        radio.checked = true;
-
-        // 통합 UI 갱신 함수 호출 (작업자 명단, 프리셋, 옵션 등 모두 갱신)
-        refreshUI();
+    const nextWorkType = shiftData.isNight ? 'night' : 'day';
+    if (workLogState.workType !== nextWorkType) {
+        workLogState.workType = nextWorkType;
+        renderWorkLogWorkerList();
+        handleWorkTypeChange();
     }
 }
 
 
 function updateDayShiftWorkers(isDay) {
-    const rows = document.querySelectorAll('#work-log-worker-list .worker-row');
-    if (!rows.length) return;
+    workLogState.workers.forEach(worker => {
+        if (worker.team !== '일근') return;
+        if (!isDay) {
+            worker.wasChecked = worker.attend;
+            worker.attend = false;
+            worker.reason = '';
+            worker.driverRole = '';
+            return;
+        }
 
-    let changed = false;
-    rows.forEach(row => {
-        if (row.dataset.team === '일근') {
-            const chk = row.querySelector('.w-chk');
-            if (!chk) return;
-
-            if (!isDay) {
-                // [야간 모드] 일근자는 근무하지 않으므로 사유 없이 무조건 체크 해제
-                if (chk.checked) {
-                    row.dataset.wasChecked = "true"; // 주간으로 돌아갈 때를 대비해 상태 저장
-                    chk.checked = false;
-                    const drv = row.querySelector('.w-drive');
-                    if (drv) drv.value = '';
-                    changed = true;
-                }
-                const note = row.querySelector('.w-note');
-                if (note && note.value !== '') {
-                    note.value = '';
-                }
-            } else {
-                // [주간 모드] 일근자 체크 복구 시, 근태 데이터를 최우선으로 판단
-                let shouldCheck = true;
-
-                // 1순위: 조회된 근태 데이터 (WORKTIME 및 GUNTAENAME 기준)
-                if (typeof guntaeData !== 'undefined' && guntaeData !== null) {
-                    const entry = guntaeData.find(d => d.SABUN === row.dataset.id);
-                    if (entry) {
-                        const status = parseGuntaeStatus(entry);
-                        shouldCheck = status.isAttending;
-
-                        // 휴가 등의 사유가 있다면 note(사유칸)도 같이 업데이트
-                        const note = row.querySelector('.w-note');
-                        if (note && status.reason) note.value = status.reason;
-                    }
-                }
-                // 2순위: 근태 데이터가 아직 없다면 과거 상태(wasChecked) 참고
-                else {
-                    shouldCheck = (row.dataset.wasChecked === "true" || !row.hasAttribute('data-was-checked'));
-                }
-
-                // 실제 체크 상태와 판단 결과가 다르면 갱신
-                if (chk.checked !== shouldCheck) {
-                    chk.checked = shouldCheck;
-                    changed = true;
-                }
-            }
+        const entry = Array.isArray(guntaeData)
+            ? guntaeData.find(item => String(item.SABUN) === String(worker.id))
+            : null;
+        if (entry) {
+            const status = parseGuntaeStatus(entry);
+            worker.attend = status.isAttending;
+            worker.reason = status.reason;
+        } else {
+            worker.attend = worker.wasChecked !== false;
         }
     });
-
-    if (changed) updateWorkerStats();
+    updateWorkerStats();
 }
 
 
@@ -3073,6 +2952,11 @@ const trackAccessState = Vue.reactive({
     presets: {},
     selectedPreset: '__NEW__',
     form: { ...TRACK_ACCESS_DEFAULTS },
+    workerPicker: { isOpen: false, role: '', selectedIndex: -1 },
+    workerListRevision: 0,
+    agreementLoading: false,
+    agreementLookupFresh: false,
+    renewalConfirmPending: false,
     hasSyncedPresets: false,
     ownerId: null
 });
@@ -3097,6 +2981,7 @@ function normalizeTrackPreset(data = {}) {
 
 function clearTrackAccessForm() {
     Object.assign(trackAccessState.form, TRACK_ACCESS_DEFAULTS);
+    trackAccessState.agreementLookupFresh = false;
 }
 
 function collectTrackAccessRecoveryState() {
@@ -3121,12 +3006,62 @@ function initTrackAccessApp() {
         data() {
             return { track: trackAccessState };
         },
+        computed: {
+            availableWorkers() {
+                // appConfig 자체는 Vue 반응형 객체가 아니므로 이 값을 의존성으로 사용한다.
+                void this.track.workerListRevision;
+                return (appConfig.appSettings?.colleagues || [])
+                    .filter(person => String(person?.name || '').trim());
+            },
+            workerPickerTitle() {
+                const labels = {
+                    driver: '운전원 선택', worker: '작업자 선택',
+                    safety: '철도운행안전관리자 선택', supervisor: '감독자 선택'
+                };
+                return labels[this.track.workerPicker.role] || '작업자 선택';
+            }
+        },
         methods: {
             loadPreset: loadTrackPreset,
             savePreset: saveTrackPreset,
             renamePreset: renameTrackPreset,
             deletePreset: deleteTrackPreset,
             runTask: runTrackAccessTask,
+            loadAgreement: requestTrackAgreement,
+            openWorkerPicker(role) {
+                const roleFields = {
+                    driver: 'driverName', worker: 'workerName',
+                    safety: 'safetyName', supervisor: 'supervisorName'
+                };
+                const currentName = String(this.track.form[roleFields[role]] || '').trim();
+                this.track.workerPicker.role = role;
+                this.track.workerPicker.selectedIndex = this.availableWorkers
+                    .findIndex(person => String(person.name || '').trim() === currentName);
+                this.track.workerPicker.isOpen = true;
+            },
+            closeWorkerPicker() {
+                this.track.workerPicker.isOpen = false;
+                this.track.workerPicker.selectedIndex = -1;
+            },
+            applyWorkerSelection(index) {
+                const selectedIndex = Number.isInteger(index) ? index : this.track.workerPicker.selectedIndex;
+                const person = this.availableWorkers[selectedIndex];
+                if (!person) return;
+
+                const mappings = {
+                    driver: ['driverName', 'driverPhone', 'phone'],
+                    worker: ['workerName', 'workerPhone', 'phone'],
+                    safety: ['safetyName', 'safetyPhone', 'phone'],
+                    supervisor: ['supervisorName', 'supervisorId', 'id']
+                };
+                const mapping = mappings[this.track.workerPicker.role];
+                if (!mapping) return;
+                this.track.form[mapping[0]] = String(person.name || '').trim();
+                this.track.form[mapping[1]] = mapping[2] === 'phone'
+                    ? formatPhoneValue(String(person.phone || ''))
+                    : String(person.id || '').replace(/\D/g, '').slice(0, 6);
+                this.closeWorkerPicker();
+            },
             formatField(field, event, type) {
                 const formatter = type === 'phone' ? formatPhoneValue : formatTimeValue;
                 this.track.form[field] = formatter(event.target.value);
@@ -3155,6 +3090,7 @@ function syncTrackPresets(forceLoad = false) {
 }
 
 function loadTrackPreset() {
+    trackAccessState.agreementLookupFresh = false;
     const key = trackAccessState.selectedPreset;
     if (!key || key === '__NEW__') {
         clearTrackAccessForm();
@@ -3239,177 +3175,208 @@ function trackAgreementNeedsRenewal(today = new Date()) {
 }
 
 function runTrackAccessTask() {
-    const needsRenewal = trackAgreementNeedsRenewal();
+    const needsRenewal = !trackAccessState.agreementLookupFresh && trackAgreementNeedsRenewal();
     if (needsRenewal) {
-        alert('협의번호 갱신이 필요합니다.\n 매크로 진행 중 협의번호를 확인 후 입력박스에 입력해 주세요.');
+        if (trackAccessState.renewalConfirmPending) return;
+        trackAccessState.renewalConfirmPending = true;
+        sendMessageToAHK({ command: 'confirmTrackAgreementRenewal' });
+        return;
     }
 
+    dispatchTrackAccessTask();
+}
+
+function dispatchTrackAccessTask() {
     const data = {
         ...normalizeTrackPreset(trackAccessState.form),
-        agreementNo: needsRenewal ? '' : trackAccessState.form.agreementNo,
-        needsRenewal
+        agreementNo: trackAccessState.form.agreementNo,
+        needsRenewal: false
     };
     sendMessageToAHK({ command: 'runTask', task: 'TrackAccess', data });
 }
 
+function requestTrackAgreement() {
+    if (trackAccessState.agreementLoading) return;
 
-// --- Vehicle Log Logic ---
-function loadVehiclePreset() {
-    const sel = document.getElementById('vehicle-preset-sel');
-    const key = sel.value;
+    const participants = [
+        trackAccessState.form.driverName,
+        trackAccessState.form.workerName,
+        trackAccessState.form.safetyName,
+        trackAccessState.form.supervisorName
+    ].map(name => String(name || '').trim()).filter(Boolean);
 
-    if (key === '__NEW__') {
-        setVal('vl-driver', '');
-        setVal('vl-point-1', '');
-        setVal('vl-point-2', '');
-        setVal('vl-track-type', '상행선');
-        setVal('vl-start-time', '');
-        setVal('vl-end-time', '');
-        setVal('vl-content', '');
-        setVal('vl-remarks', '');
-        setVal('vl-approve-no', '');
-        setVal('vl-dept', '');
-        setVal('vl-approver', '');
-        setVal('vl-run-time', '');
-        setVal('vl-distance', '');
+    if (participants.length === 0) {
+        showNativeMsgBox('운전원, 작업자, 철도운행안전관리자 또는 감독자를 먼저 입력해주세요.');
         return;
     }
 
-    if (!key) return;
+    trackAccessState.agreementLoading = true;
+    sendMessageToAHK({ command: 'loadTrackAgreement', participants });
+}
 
+function applyTrackAgreementNo(value) {
+    if (!value) return;
+    trackAccessState.form.agreementNo = value;
+    trackAccessState.agreementLookupFresh = true;
+}
+
+
+// --- Vehicle Log Logic (Vue) ---
+const VEHICLE_LOG_DEFAULTS = Object.freeze({
+    driver: '', point1: '', point2: '', trackType: '상행선',
+    startTime: '', endTime: '', content: '', remarks: '',
+    approveNo: '', dept: '', approver: '', runTime: '', distance: ''
+});
+
+const vehicleLogState = Vue.reactive({
+    presets: {},
+    selectedPreset: '__NEW__',
+    form: { ...VEHICLE_LOG_DEFAULTS },
+    hasSyncedPresets: false,
+    ownerId: null
+});
+
+function collectVehicleLogRecoveryState() {
+    return {
+        selectedPreset: vehicleLogState.selectedPreset,
+        form: { ...normalizeVehiclePreset(vehicleLogState.form) }
+    };
+}
+
+function restoreVehicleLogRecoveryState(savedState) {
+    if (!savedState?.form || typeof savedState.form !== 'object') return;
+    const savedPreset = savedState.selectedPreset;
+    vehicleLogState.selectedPreset = savedPreset === '__NEW__' || vehicleLogState.presets[savedPreset]
+        ? savedPreset
+        : '__NEW__';
+    Object.assign(vehicleLogState.form, normalizeVehiclePreset(savedState.form));
+}
+
+function normalizeVehiclePreset(data = {}) {
+    const normalized = {};
+    Object.keys(VEHICLE_LOG_DEFAULTS).forEach(key => {
+        normalized[key] = data[key] === undefined || data[key] === null
+            ? VEHICLE_LOG_DEFAULTS[key]
+            : String(data[key]);
+    });
+    return normalized;
+}
+
+function clearVehicleLogForm() {
+    Object.assign(vehicleLogState.form, VEHICLE_LOG_DEFAULTS);
+}
+
+function initVehicleLogApp() {
+    Vue.createApp({
+        data() {
+            return { vehicle: vehicleLogState };
+        },
+        methods: {
+            loadPreset: loadVehiclePreset,
+            savePreset: saveVehiclePreset,
+            renamePreset: renameVehiclePreset,
+            deletePreset: deleteVehiclePreset,
+            runTask: runVehicleLogTask,
+            loadApproval: runBringApproved,
+            formatTimeField(field, event) {
+                this.vehicle.form[field] = formatTimeValue(event.target.value);
+            },
+            digitsOnly(field, event) {
+                this.vehicle.form[field] = event.target.value.replace(/[^0-9]/g, '');
+            }
+        }
+    }).mount('#view-vehicle-log');
+}
+
+function syncVehiclePresets(forceLoad = false) {
     const presets = getUserPresets('vehicle');
-    const data = presets[key];
+    const keys = Object.keys(presets);
+    const current = vehicleLogState.selectedPreset;
+    const ownerChanged = vehicleLogState.ownerId !== selectedUserId;
+    vehicleLogState.presets = { ...presets };
 
-    if (data) {
-        setVal('vl-driver', data.driver);
-        setVal('vl-point-1', data.point1);
-        setVal('vl-point-2', data.point2);
-        setVal('vl-track-type', data.trackType);
-        setVal('vl-start-time', data.startTime);
-        setVal('vl-end-time', data.endTime);
-        setVal('vl-content', data.content);
-        setVal('vl-remarks', data.remarks);
-        setVal('vl-approve-no', data.approveNo);
-        setVal('vl-dept', data.dept);
-        setVal('vl-approver', data.approver);
-        setVal('vl-run-time', data.runTime);
-        setVal('vl-distance', data.distance);
+    let next = '__NEW__';
+    if (keys.length > 0) next = presets[current] ? current : keys[0];
+    const shouldLoad = forceLoad || ownerChanged || !vehicleLogState.hasSyncedPresets || next !== current;
+    vehicleLogState.selectedPreset = next;
+    vehicleLogState.hasSyncedPresets = true;
+    vehicleLogState.ownerId = selectedUserId;
+    if (shouldLoad) loadVehiclePreset();
+}
+
+function loadVehiclePreset() {
+    const key = vehicleLogState.selectedPreset;
+    if (!key || key === '__NEW__') {
+        clearVehicleLogForm();
+        return;
     }
+    const data = vehicleLogState.presets[key] || getUserPresets('vehicle')[key];
+    if (data) Object.assign(vehicleLogState.form, normalizeVehiclePreset(data));
 }
 
 function saveVehiclePreset() {
-    const sel = document.getElementById('vehicle-preset-sel');
-    let key = sel.value;
-
+    let key = vehicleLogState.selectedPreset;
     if (!key || key === '__NEW__') {
-        const newName = prompt("새 프리셋 이름을 입력하세요:");
-        if (!newName) return;
-        key = newName;
+        key = (prompt('새 프리셋 이름을 입력하세요:') || '').trim();
+        if (!key) return;
     }
 
-    const data = {
-        driver: getVal('vl-driver'),
-        point1: getVal('vl-point-1'),
-        point2: getVal('vl-point-2'),
-        trackType: getVal('vl-track-type'),
-        startTime: getVal('vl-start-time'),
-        endTime: getVal('vl-end-time'),
-        content: getVal('vl-content'),
-        remarks: getVal('vl-remarks'),
-        approveNo: getVal('vl-approve-no'),
-        dept: getVal('vl-dept'),
-        approver: getVal('vl-approver'),
-        runTime: getVal('vl-run-time'),
-        distance: getVal('vl-distance')
-    };
-
     const presets = getUserPresets('vehicle');
-    presets[key] = data;
+    presets[key] = normalizeVehiclePreset(vehicleLogState.form);
+    vehicleLogState.selectedPreset = key;
     saveUserPresets('vehicle', presets);
-
-    renderPresetOptions('vehicle-preset-sel', presets);
-    sel.value = key;
-
+    syncVehiclePresets();
     showNativeMsgBox(`'${key}' 프리셋이 저장되었습니다.`);
 }
 
 function renameVehiclePreset() {
-    const sel = document.getElementById('vehicle-preset-sel');
-    const oldKey = sel.value;
+    const oldKey = vehicleLogState.selectedPreset;
     if (!oldKey || oldKey === '__NEW__') {
-        showNativeMsgBox("이름을 변경할 프리셋을 선택해주세요.");
+        showNativeMsgBox('이름을 변경할 프리셋을 선택해주세요.');
         return;
     }
-
-    const newKey = prompt("새 이름을 입력하세요:", oldKey);
+    const newKey = (prompt('새 이름을 입력하세요:', oldKey) || '').trim();
     if (!newKey || newKey === oldKey) return;
 
     const presets = getUserPresets('vehicle');
     if (presets[newKey]) {
-        showNativeMsgBox("이미 존재하는 이름입니다.");
+        showNativeMsgBox('이미 존재하는 이름입니다.');
         return;
     }
-
     presets[newKey] = presets[oldKey];
     delete presets[oldKey];
+    vehicleLogState.selectedPreset = newKey;
     saveUserPresets('vehicle', presets);
-
-    renderPresetOptions('vehicle-preset-sel', presets);
-    sel.value = newKey;
+    syncVehiclePresets();
 }
 
 function deleteVehiclePreset() {
-    const sel = document.getElementById('vehicle-preset-sel');
-    const key = sel.value;
+    const key = vehicleLogState.selectedPreset;
     if (!key || key === '__NEW__') {
-        showNativeMsgBox("삭제할 프리셋을 선택해주세요.");
+        showNativeMsgBox('삭제할 프리셋을 선택해주세요.');
         return;
     }
-
     if (!confirm(`'${key}' 프리셋을 삭제하시겠습니까?`)) return;
 
     const presets = getUserPresets('vehicle');
     delete presets[key];
+    vehicleLogState.selectedPreset = '__NEW__';
     saveUserPresets('vehicle', presets);
-
-    renderPresetOptions('vehicle-preset-sel', presets);
-
-    // Auto-select logic
-    const newKeys = Object.keys(presets);
-    if (newKeys.length > 0) {
-        sel.value = newKeys[0];
-    } else {
-        sel.value = "__NEW__";
-    }
-    sel.dispatchEvent(new Event('change'));
+    syncVehiclePresets(true);
 }
 
 function runVehicleLogTask() {
     const data = {
-        driver: getVal('vl-driver'),
-        department: appConfig.users[selectedUserId] ? appConfig.users[selectedUserId].profile.department : '',
-        point1: getVal('vl-point-1'),
-        point2: getVal('vl-point-2'),
-        trackType: getVal('vl-track-type'),
-        startTime: getVal('vl-start-time'),
-        endTime: getVal('vl-end-time'),
-        content: getVal('vl-content'),
-        remarks: getVal('vl-remarks'),
-        approveNo: getVal('vl-approve-no'),
-        dept: getVal('vl-dept'),
-        approver: getVal('vl-approver'),
-        runTime: getVal('vl-run-time'),
-        distance: getVal('vl-distance')
+        ...normalizeVehiclePreset(vehicleLogState.form),
+        department: appConfig.users[selectedUserId]?.profile?.department || ''
     };
-
-    sendMessageToAHK({ command: 'runTask', task: 'VehicleLog', data: data });
+    sendMessageToAHK({ command: 'runTask', task: 'VehicleLog', data });
 }
 
-// Execute 'runBringApproved' command
 function runBringApproved() {
-    const driver = getVal('vl-driver');
+    const driver = vehicleLogState.form.driver.trim();
     if (!driver) {
-        showNativeMsgBox("운전자를 입력해주세요.");
+        showNativeMsgBox('운전자를 입력해주세요.');
         return;
     }
     sendMessageToAHK({
@@ -3432,9 +3399,8 @@ function setVal(id, val) {
 
 // Helper: Init Presets after login
 function initPresets() {
-    const vehiclePresets = getUserPresets('vehicle');
     syncTrackPresets();
-    renderPresetOptions('vehicle-preset-sel', vehiclePresets);
+    syncVehiclePresets();
 }
 
 
@@ -3569,16 +3535,12 @@ function refreshUI() {
     // renderWorkLogWorkerList는 appConfig.users[selectedUserId]와 appSettings.colleagues를 새로 읽어옵니다.
     renderWorkLogWorkerList();
 
-    // 2. 업무일지: 프리셋 및 옵션 재적용
-    // handleWorkTypeChange(true)는 현재 선택된 주/야간 모드에 맞춰 체크박스, 안전관리 내용을 다시 세팅합니다.
-    handleWorkTypeChange(true);
-
-    // 3. ERP 점검: 장소 목록 및 오더번호 갱신
+    // 2. ERP 점검: 장소 목록 및 오더번호 갱신
     // 탭이 그 때 활성화되어 있지 않더라도 DOM을 갱신해두면 나중에 탭 진입 시 최신 상태가 보입니다.
     renderERPCheck();
     updateToggleStyle();
 
-    // 4. 프리셋 목록 갱신 (선로출입/차량일지)
+    // 3. 프리셋 목록 갱신 (선로출입/차량일지)
     // 설정에서 프리셋이 변경되었을 때 반영하기 위해 갱신합니다.
     initPresets();
 }

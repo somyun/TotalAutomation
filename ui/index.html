@@ -189,7 +189,7 @@
         <!-- Content Area -->
         <main id="content">
             <!-- Work Log View (Refactored) -->
-            <div id="view-work-log" class="view-section active">
+            <div id="view-work-log" class="view-section active" v-cloak>
                 <div class="view-header">
                     <h1>업무일지</h1>
                 </div>
@@ -205,13 +205,13 @@
                                 <!-- Work Type Toggle -->
                                 <div class="option-group">
                                     <label class="radio-label">
-                                        <input type="radio" name="work-type" value="day" checked
-                                            onchange="handleWorkTypeChange()">
+                                        <input type="radio" name="work-type" value="day" v-model="work.workType"
+                                            @change="changeWorkType">
                                         <span>주간</span>
                                     </label>
                                     <label class="radio-label">
-                                        <input type="radio" name="work-type" value="night"
-                                            onchange="handleWorkTypeChange()">
+                                        <input type="radio" name="work-type" value="night" v-model="work.workType"
+                                            @change="changeWorkType">
                                         <span>야간</span>
                                     </label>
                                 </div>
@@ -219,19 +219,21 @@
                                 <!-- Checkbox Group -->
                                 <div class="option-group checkbox-group vertical-group">
                                     <label class="checkbox-label">
-                                        <input type="checkbox" id="chk-make-log">
+                                        <input type="checkbox" id="chk-make-log" v-model="work.options.makeLog"
+                                            :disabled="work.workType === 'night'">
                                         <span>일지생성</span>
                                     </label>
                                     <label class="checkbox-label">
-                                        <input type="checkbox" id="chk-general" checked>
+                                        <input type="checkbox" id="chk-general" v-model="work.options.general">
                                         <span>일반업무</span>
                                     </label>
                                     <label class="checkbox-label">
-                                        <input type="checkbox" id="chk-safe-manage" checked>
+                                        <input type="checkbox" id="chk-safe-manage" v-model="work.options.safe">
                                         <span>안전관리</span>
                                     </label>
                                     <label class="checkbox-label">
-                                        <input type="checkbox" id="chk-driving">
+                                        <input type="checkbox" id="chk-driving" v-model="work.options.driving"
+                                            :disabled="work.workType === 'day'">
                                         <span>운전적합성</span>
                                     </label>
                                 </div>
@@ -239,11 +241,13 @@
                                 <!-- Drink Check -->
                                 <div class="option-group vertical-group">
                                     <label class="checkbox-label">
-                                        <input type="checkbox" id="chk-drink" onchange="toggleDrinkCalibration()">
+                                        <input type="checkbox" id="chk-drink" v-model="work.options.drink"
+                                            :disabled="work.workType === 'night'" @change="toggleDrink">
                                         <span>주간 음주측정</span>
                                     </label>
                                     <label class="checkbox-label" style="margin-left: 20px;">
-                                        <input type="checkbox" id="chk-drink-cal" disabled>
+                                        <input type="checkbox" id="chk-drink-cal" v-model="work.options.drinkCalibration"
+                                            :disabled="work.workType === 'night' || !work.options.drink">
                                         <span>교정 입고중</span>
                                     </label>
                                 </div>
@@ -254,7 +258,9 @@
                                 <div class="worker-section">
                                     <div class="section-header">
                                         <h3>작업자 명단 <span id="worker-search-status" class="status-label"
-                                                style="display: none; font-size: 0.8em; color: green; margin-left: 10px;">인원조회완료</span>
+                                                v-show="work.guntaeStatus === 'success' || work.guntaeStatus === 'failure'"
+                                                :style="{ color: work.guntaeStatus === 'success' ? 'green' : '#d32f2f' }"
+                                                style="font-size: 0.8em; margin-left: 10px;">{{ work.guntaeStatus === 'success' ? '근태조회완료' : '근태조회실패' }}</span>
                                         </h3>
                                         <!-- Select All Removed -->
                                     </div>
@@ -262,10 +268,35 @@
                                         <!-- Checkbox Col Removed -->
                                         <div class="wl-name">이름</div>
                                         <div class="wl-note">휴가/비고</div>
-                                        <div class="wl-drive hidden-col" id="col-header-drive">운전</div>
+                                        <div class="wl-drive" :class="{ 'hidden-col': work.workType === 'day' }"
+                                            id="col-header-drive">운전</div>
                                     </div>
                                     <div id="work-log-worker-list" class="worker-list-body">
-                                        <!-- Dynamic Content -->
+                                        <div v-for="worker in work.workers" :key="worker.id" class="worker-row"
+                                            :data-id="worker.id" :data-team="worker.team" :data-name="worker.name"
+                                            :data-is-manager="worker.isManager">
+                                            <label class="wl-name checkbox-label" style="margin: 0;"
+                                                :for="'chk-worker-' + worker.id">
+                                                <input type="checkbox" class="w-chk" :id="'chk-worker-' + worker.id"
+                                                    v-model="worker.attend" @change="workerAttendanceChanged(worker)">
+                                                <span>{{ worker.name }}</span>
+                                            </label>
+                                            <div class="wl-note">
+                                                <input type="text" placeholder="사유" class="w-note"
+                                                    :id="'note-worker-' + worker.id" v-model="worker.reason"
+                                                    @input="workerNoteChanged(worker)">
+                                            </div>
+                                            <div class="wl-drive w-drive-cell"
+                                                :class="{ 'hidden-col': work.workType === 'day' }">
+                                                <select class="w-drive" :id="'drv-worker-' + worker.id"
+                                                    v-model="worker.driverRole" :disabled="work.workType === 'day'">
+                                                    <option value="">-</option>
+                                                    <option value="정">정</option>
+                                                    <option value="부">부</option>
+                                                    <option value="검사자">검사자</option>
+                                                </select>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -280,38 +311,42 @@
                                 <!-- Row 1 -->
                                 <div class="safety-row">
                                     <input type="text" id="safe-content-1" placeholder="안전관리 내용 (오전/저녁)"
-                                        class="safety-input-content">
+                                        class="safety-input-content" v-model="work.safety[0].content">
                                     <div class="safety-time-group">
                                         <input type="text" id="safe-date-1" placeholder="YYYYMMDD"
-                                            class="safety-input-date">
+                                            class="safety-input-date" v-model="work.safety[0].date">
                                         <div class="time-pair">
                                             <span>시작</span>
                                             <input type="text" id="safe-start-1" placeholder="hh:mm"
-                                                class="safety-input-time">
+                                                class="safety-input-time" v-model="work.safety[0].start"
+                                                @input="formatSafetyTime(0, 'start', $event)">
                                         </div>
                                         <div class="time-pair">
                                             <span>종료</span>
                                             <input type="text" id="safe-end-1" placeholder="hh:mm"
-                                                class="safety-input-time">
+                                                class="safety-input-time" v-model="work.safety[0].end"
+                                                @input="formatSafetyTime(0, 'end', $event)">
                                         </div>
                                     </div>
                                 </div>
                                 <!-- Row 2 -->
                                 <div class="safety-row">
                                     <input type="text" id="safe-content-2" placeholder="안전관리 내용 (오후/새벽)"
-                                        class="safety-input-content">
+                                        class="safety-input-content" v-model="work.safety[1].content">
                                     <div class="safety-time-group">
                                         <input type="text" id="safe-date-2" placeholder="YYYYMMDD"
-                                            class="safety-input-date">
+                                            class="safety-input-date" v-model="work.safety[1].date">
                                         <div class="time-pair">
                                             <span>시작</span>
                                             <input type="text" id="safe-start-2" placeholder="hh:mm"
-                                                class="safety-input-time">
+                                                class="safety-input-time" v-model="work.safety[1].start"
+                                                @input="formatSafetyTime(1, 'start', $event)">
                                         </div>
                                         <div class="time-pair">
                                             <span>종료</span>
                                             <input type="text" id="safe-end-2" placeholder="hh:mm"
-                                                class="safety-input-time">
+                                                class="safety-input-time" v-model="work.safety[1].end"
+                                                @input="formatSafetyTime(1, 'end', $event)">
                                         </div>
                                     </div>
                                 </div>
@@ -321,7 +356,7 @@
                 </div>
 
                 <div class="view-footer">
-                    <button class="primary-btn large-btn" onclick="startWorkLog()">시작</button>
+                    <button class="primary-btn large-btn" @click="startTask">시작</button>
                 </div>
             </div>
 
@@ -547,34 +582,42 @@
                             </div>
                             <div class="form-group">
                                 <label>운전원</label>
-                                <div class="pair-input">
+                                <div class="pair-input track-person-input">
                                     <input type="text" id="ta-driver-name" placeholder="이름" v-model="track.form.driverName">
                                     <input type="text" id="ta-driver-phone" placeholder="연락처" v-model="track.form.driverPhone"
                                         @input="formatField('driverPhone', $event, 'phone')">
+                                    <button type="button" class="track-person-search" title="설정 작업자에서 운전원 선택"
+                                        aria-label="설정 작업자에서 운전원 선택" @click="openWorkerPicker('driver')">&#128269;</button>
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label>작업자</label>
-                                <div class="pair-input">
+                                <div class="pair-input track-person-input">
                                     <input type="text" id="ta-worker-name" placeholder="이름" v-model="track.form.workerName">
                                     <input type="text" id="ta-worker-phone" placeholder="연락처" v-model="track.form.workerPhone"
                                         @input="formatField('workerPhone', $event, 'phone')">
+                                    <button type="button" class="track-person-search" title="설정 작업자에서 작업자 선택"
+                                        aria-label="설정 작업자에서 작업자 선택" @click="openWorkerPicker('worker')">&#128269;</button>
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label>철도운행안전관리자</label>
-                                <div class="pair-input">
+                                <div class="pair-input track-person-input">
                                     <input type="text" id="ta-safety-name" placeholder="이름" v-model="track.form.safetyName">
                                     <input type="text" id="ta-safety-phone" placeholder="연락처" v-model="track.form.safetyPhone"
                                         @input="formatField('safetyPhone', $event, 'phone')">
+                                    <button type="button" class="track-person-search" title="설정 작업자에서 철도운행안전관리자 선택"
+                                        aria-label="설정 작업자에서 철도운행안전관리자 선택" @click="openWorkerPicker('safety')">&#128269;</button>
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label>감독자</label>
-                                <div class="pair-input">
+                                <div class="pair-input track-person-input">
                                     <input type="text" id="ta-supervisor-name" placeholder="이름" v-model="track.form.supervisorName">
                                     <input type="text" id="ta-supervisor-id" maxlength="6"
                                         v-model="track.form.supervisorId" @input="digitsOnly('supervisorId', $event)" placeholder="사번">
+                                    <button type="button" class="track-person-search" title="설정 작업자에서 감독자 선택"
+                                        aria-label="설정 작업자에서 감독자 선택" @click="openWorkerPicker('supervisor')">&#128269;</button>
                                 </div>
                             </div>
                         </div>
@@ -648,7 +691,13 @@
                             </div>
                             <div class="form-group">
                                 <label>철도운행협의서 No.</label>
-                                <input type="text" id="ta-agreement-no" placeholder="번호 입력" v-model="track.form.agreementNo">
+                                <div class="track-agreement-input">
+                                    <input type="text" id="ta-agreement-no" placeholder="번호 입력" v-model="track.form.agreementNo">
+                                    <button type="button" class="secondary-btn track-agreement-load"
+                                        :disabled="track.agreementLoading" @click="loadAgreement">
+                                        {{ track.agreementLoading ? '조회 중...' : '불러오기' }}
+                                    </button>
+                                </div>
                             </div>
                             <div class="sub-group">
                                 <label class="sub-label">총원 (인원 구성)</label>
@@ -673,19 +722,53 @@
                         <button class="primary-btn large-btn" @click="runTask">시작</button>
                     </div>
                 </div>
+
+                <div class="modal-overlay" v-show="track.workerPicker.isOpen" v-cloak
+                    @click.self="closeWorkerPicker">
+                    <div class="modal-content track-worker-picker" role="dialog" aria-modal="true"
+                        aria-labelledby="track-worker-picker-title">
+                        <div class="modal-header">
+                            <h3 id="track-worker-picker-title">{{ workerPickerTitle }}</h3>
+                            <button type="button" class="close-btn-icon" @click="closeWorkerPicker">&times;</button>
+                        </div>
+                        <div class="modal-body track-worker-list">
+                            <div v-if="availableWorkers.length === 0" class="erp-worker-empty">
+                                설정에 저장된 작업자가 없습니다.
+                            </div>
+                            <button type="button" v-for="(person, index) in availableWorkers"
+                                :key="person.id || index" class="track-worker-row"
+                                :class="{ selected: track.workerPicker.selectedIndex === index }"
+                                @click="track.workerPicker.selectedIndex = index"
+                                @dblclick="applyWorkerSelection(index)">
+                                <span class="track-worker-name">{{ person.name }}</span>
+                                <span class="track-worker-team">{{ person.team || '-' }}</span>
+                                <span class="track-worker-detail">
+                                    {{ track.workerPicker.role === 'supervisor' ? (person.id || '사번 없음') : (person.phone || '연락처 없음') }}
+                                </span>
+                            </button>
+                        </div>
+                        <div class="modal-footer track-worker-actions">
+                            <button type="button" class="secondary-btn" @click="closeWorkerPicker">취소</button>
+                            <button type="button" class="primary-btn" :disabled="track.workerPicker.selectedIndex < 0"
+                                @click="applyWorkerSelection()">확인</button>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Vehicle Log View -->
-            <div id="view-vehicle-log" class="view-section">
+            <div id="view-vehicle-log" class="view-section" v-cloak>
                 <div class="view-header">
                     <div class="header-row">
                         <h1>차량운행일지</h1>
                         <div class="preset-controls">
-                            <select id="vehicle-preset-sel" class="preset-select" onchange="loadVehiclePreset()"
-                                ondblclick="renameVehiclePreset()">
+                            <select id="vehicle-preset-sel" class="preset-select" v-model="vehicle.selectedPreset"
+                                @change="loadPreset" @dblclick="renamePreset">
+                                <option v-for="(_, name) in vehicle.presets" :key="name" :value="name">{{ name }}</option>
+                                <option value="__NEW__">+ 새 프리셋 추가</option>
                             </select>
-                            <button class="secondary-btn small" onclick="saveVehiclePreset()">저장</button>
-                            <button class="danger-btn small" onclick="deleteVehiclePreset()">삭제</button>
+                            <button class="secondary-btn small" @click="savePreset">저장</button>
+                            <button class="danger-btn small" @click="deletePreset">삭제</button>
                         </div>
                     </div>
                 </div>
@@ -696,19 +779,19 @@
                         <div class="grid-col">
                             <div class="form-group">
                                 <label>운전자</label>
-                                <input type="text" id="vl-driver" placeholder="이름">
+                                <input type="text" id="vl-driver" placeholder="이름" v-model="vehicle.form.driver">
                             </div>
                             <div class="form-group">
                                 <label>작업구간 (시점 ~ 종점)</label>
                                 <div class="pair-input">
-                                    <input type="text" id="vl-point-1" placeholder="시점">
+                                    <input type="text" id="vl-point-1" placeholder="시점" v-model="vehicle.form.point1">
                                     <span class="tilde">~</span>
-                                    <input type="text" id="vl-point-2" placeholder="종점">
+                                    <input type="text" id="vl-point-2" placeholder="종점" v-model="vehicle.form.point2">
                                 </div>
                             </div>
                             <div class="form-group">
                                 <label>선로구분</label>
-                                <select id="vl-track-type">
+                                <select id="vl-track-type" v-model="vehicle.form.trackType">
                                     <option value="상행선">상행선</option>
                                     <option value="하행선">하행선</option>
                                 </select>
@@ -716,9 +799,11 @@
                             <div class="form-group">
                                 <label>운행시간 (시작 ~ 종료)</label>
                                 <div class="pair-input">
-                                    <input type="text" id="vl-start-time" placeholder="HH:mm">
+                                    <input type="text" id="vl-start-time" placeholder="HH:mm" v-model="vehicle.form.startTime"
+                                        @input="formatTimeField('startTime', $event)">
                                     <span class="tilde">~</span>
-                                    <input type="text" id="vl-end-time" placeholder="HH:mm">
+                                    <input type="text" id="vl-end-time" placeholder="HH:mm" v-model="vehicle.form.endTime"
+                                        @input="formatTimeField('endTime', $event)">
                                 </div>
                             </div>
                         </div>
@@ -728,40 +813,40 @@
                             <div class="form-group">
                                 <label>승인정보</label>
                                 <div class="input-grid g-3" style="gap:5px;">
-                                    <input type="text" id="vl-approve-no" placeholder="승인번호">
-                                    <input type="text" id="vl-dept" placeholder="부서">
-                                    <input type="text" id="vl-approver" placeholder="승인자">
+                                    <input type="text" id="vl-approve-no" placeholder="승인번호" v-model="vehicle.form.approveNo">
+                                    <input type="text" id="vl-dept" placeholder="부서" v-model="vehicle.form.dept">
+                                    <input type="text" id="vl-approver" placeholder="승인자" v-model="vehicle.form.approver">
                                 </div>
                             </div>
                             <div class="form-group">
                                 <button id="btn-approval-info" class="secondary-btn full-width" disabled
                                     style="margin-top: 10px; height: 40px;"
-                                    onclick="runBringApproved()">승인정보 불러오기</button>
+                                    @click="loadApproval">승인정보 불러오기</button>
                             </div>
                             <div class="form-group">
                                 <label>가동시간</label>
-                                <input type="text" id="vl-run-time"
-                                    oninput="this.value=this.value.replace(/[^0-9]/g,'');">
+                                <input type="text" id="vl-run-time" v-model="vehicle.form.runTime"
+                                    @input="digitsOnly('runTime', $event)">
                             </div>
                             <div class="form-group">
                                 <label>적산계</label>
-                                <input type="text" id="vl-distance"
-                                    oninput="this.value=this.value.replace(/[^0-9]/g,'');">
+                                <input type="text" id="vl-distance" v-model="vehicle.form.distance"
+                                    @input="digitsOnly('distance', $event)">
                             </div>
                         </div>
                     </div>
                     <div class="form-group full-width-col">
                         <label>내용</label>
-                        <input type="text" id="vl-content">
+                        <input type="text" id="vl-content" v-model="vehicle.form.content">
                     </div>
                     <div class="form-group full-width-col">
                         <label>비고</label>
-                        <input type="text" id="vl-remarks">
+                        <input type="text" id="vl-remarks" v-model="vehicle.form.remarks">
                     </div>
                 </div>
                 <div class="view-footer">
                     <div class="action-footer" style="justify-content: flex-end;">
-                        <button class="primary-btn large-btn" onclick="runVehicleLogTask()">시작</button>
+                        <button class="primary-btn large-btn" @click="runTask">시작</button>
                     </div>
                 </div>
             </div>

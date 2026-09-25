@@ -288,19 +288,6 @@ RunTrackAccess(data) {
 
         WinWaitClose(hwnd)
 
-        ; 수동 선택 시 InputBox로 협의번호 입력받아 프리셋/UI에 반영
-        if needsManual {
-            needsRenewal := data.Has("needsRenewal") ? data["needsRenewal"] : false
-            prompt := needsRenewal
-                ? "갱신된 협의서의 협의번호를 입력해 주세요"
-                    : "확인한 협의번호를 입력해 주세요"
-            ib := InputBox(prompt, "통합자동화", "w280 h120")
-            if (ib.Result == "OK" && ib.Value != "") {
-                payload := Map("type", "updateAgreementNo", "value", ib.Value)
-                wv.PostWebMessageAsJson(JSON.stringify(payload))
-            }
-            Sleep 250
-        }
     }
 
     ; (24) 운행to

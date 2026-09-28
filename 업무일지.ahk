@@ -379,6 +379,7 @@ class workers {
 
 class RunWorkLog {
     cUIA := ""
+    targetDate := ""
 
     __New(data) {
         this.data := data
@@ -437,7 +438,13 @@ class RunWorkLog {
     }
 
     Run() {
-        LogDebug("[일지준비] RunWorkLog.Run 시작 | create=" this.data["chkCreate"] " | general=" this.data["chkGeneralWork"] " | safety=" this.data["chkSafety"] " | driving=" this.data["chkDriving"])
+        ; 실행 도중 교대 시각(09:00/18:00)을 지나더라도 생성과 조회가 같은 일지를
+        ; 사용하도록 현재 사용자의 교대 컨텍스트에서 근무 기준일을 한 번만 확정합니다.
+        userTeam := ConfigManager.CurrentUser.Has("team") ? ConfigManager.CurrentUser["team"] : ""
+        workContext := WorkLogManager.GetCurrentContext(userTeam)
+        this.targetDate := workContext["date"]
+
+        LogDebug("[일지준비] RunWorkLog.Run 시작 | targetDate=" this.targetDate " | shift=" workContext["shiftName"] " | create=" this.data["chkCreate"] " | general=" this.data["chkGeneralWork"] " | safety=" this.data["chkSafety"] " | driving=" this.data["chkDriving"])
         ; 1. 일지 생성
         if this.data["chkCreate"] {
             if this.EnsureReady("WorkLog_Create")
@@ -490,7 +497,8 @@ class RunWorkLog {
     }
 
     EnsureReady(type) {
-        this.cUIA := WebAutoLogin.EnsureReady(type)
+        ; Run()에서 확정한 근무 기준일을 브라우저 준비와 팝업 탐색까지 전달합니다.
+        this.cUIA := WebAutoLogin.EnsureReady(type, this.targetDate)
         if (!this.cUIA) {
             return false
         }

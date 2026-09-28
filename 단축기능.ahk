@@ -303,7 +303,7 @@ class ShortcutActions {
         return
     }
 
-    ; Win + Alt + Z : 일지 열기 (일반 모드)
+    ; Win + Alt + Z : 현재 근무 기준일의 업무일지 열기
     static OpenLogAction(*) {
         WebAutoLogin.EnsureReady("WorkLog_View")
     }

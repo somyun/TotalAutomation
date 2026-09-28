@@ -11,15 +11,22 @@ class WebAutoLogin {
     ; ==============================================================================
     ; [메서드] EnsureReady
     ; 설명: 작업 유형에 따른 브라우저 상태를 준비합니다.
+    ;       업무일지는 전달받은 근무 기준일을 생성/조회/팝업 탐색에 공통 사용합니다.
     ; ==============================================================================
-    static EnsureReady(taskType) {
+    static EnsureReady(taskType, targetDate := "") {
         user := ConfigManager.CurrentUser
-        if (taskType == "WorkLog_Create" || taskType == "WorkLog_View")
-            LogDebug("[일지준비] EnsureReady 시작 | taskType=" taskType)
         if (!user.Has("id")) {
             LogDebug("[오류] 로그인된 사용자가 없음 (EnsureReady)")
             MsgBox("로그인된 사용자가 없습니다. 먼저 로컬 로그인을 수행해주세요.", "오류", "Iconx")
             return false
+        }
+
+        isWorkLogTask := (taskType == "WorkLog_Create" || taskType == "WorkLog_View")
+        if isWorkLogTask {
+            ; 직접 호출 경로(단축키/차량일지)는 날짜를 전달하지 않으므로 같은 교대
+            ; 컨텍스트 규칙으로 여기서 보완하고, 이후에는 yyyyMMdd 값을 그대로 전달합니다.
+            targetDate := this._ResolveWorkLogTargetDate(user, targetDate)
+            LogDebug("[일지준비] EnsureReady 시작 | taskType=" taskType " | targetDate=" targetDate)
         }
 
         ; 1. 정상 조건: 쿠키 데이터가 존재하고 webPW가 있는 경우 (Headless/CDP 주입 방식)
@@ -32,7 +39,7 @@ class WebAutoLogin {
             }
             else if (taskType == "WorkLog_Create") {
                 try {
-                    return this.LaunchLogSession(user, "reg", "general")
+                    return this.LaunchLogSession(user, "reg", targetDate)
                 } catch as e {
                     LogDebug("[오류] 업무일지 생성 화면 이동 중 오류: " e.Message)
                     MsgBox("업무일지 생성 화면 이동 중 오류: " e.Message, "오류", "Iconx")
@@ -40,7 +47,7 @@ class WebAutoLogin {
                 }
             }
             else if (taskType == "WorkLog_View") {
-                existingLog := this._FindBrowserByElement(false)
+                existingLog := this._FindBrowserByElement(targetDate)
 
                 if existingLog {
                     LogDebug("[일지준비] 통합 세션 경로에서 이미 열린 조회 팝업 발견 | hwnd=" existingLog.BrowserId)
@@ -48,7 +55,7 @@ class WebAutoLogin {
                     if !this._ActivateListWindow() {
                         LogDebug("[일지준비] 기존 팝업은 있으나 목록 창 없음 | 목록 창 준비 시작")
                         ; 리스트 창이 없으면(Case 3) 리스트만 생성
-                        try this.LaunchLogSession(user, "mod", "general", true)
+                        try this.LaunchLogSession(user, "mod", targetDate, true)
                     }
                     ; 기존 일지 페이지 active
                     Sleep 200
@@ -58,7 +65,7 @@ class WebAutoLogin {
 
                 ; 일지가 없으면 생성 (Case 1, 2, 5)
                 try {
-                    return this.LaunchLogSession(user, "mod", "general")
+                    return this.LaunchLogSession(user, "mod", targetDate)
                 } catch as e {
                     LogDebug("[오류] 업무일지 조회 화면 이동 중 오류: " e.Message)
                     MsgBox("업무일지 조회 화면 이동 중 오류: " e.Message, "오류", "Iconx")
@@ -133,20 +140,20 @@ class WebAutoLogin {
                 popupTick := A_TickCount
                 LogDebug("[일지팝업] 생성 팝업 UIA 탐색 시작 | timeout=5000ms")
                 loop 20 {
-                    if cBrowser := this._FindBrowserByElement(true) {
+                    if cBrowser := this._FindBrowserByElement(targetDate) {
                         LogDebug("[일지팝업] 생성 팝업 UIA 탐색 성공 | elapsed=" (A_TickCount - popupTick) "ms | hwnd=" cBrowser.BrowserId)
                         return cBrowser
                     }
                     Sleep 250
                 }
                 LogDebug("[오류] 팝업창(업무일지 생성)을 감지하지 못함 | elapsed=" (A_TickCount - popupTick) "ms")
-                this._LogWorkLogBrowserSnapshot(true, "레거시 생성 팝업 타임아웃")
+                this._LogWorkLogBrowserSnapshot(targetDate, "레거시 생성 팝업 타임아웃")
                 MsgBox("팝업창(업무일지 생성)을 감지하지 못했습니다.", "오류", "Iconx")
                 return false
             }
             else if (taskType == "WorkLog_View") {
                 ; 조회 시 기존 팝업창이 열려있는지 1회 확인
-                if cUIA := this._FindBrowserByElement(false) {
+                if cUIA := this._FindBrowserByElement(targetDate) {
                     LogDebug("[일지준비] 이미 열린 조회 팝업 발견 | hwnd=" cUIA.BrowserId)
                     return cUIA
                 }
@@ -157,7 +164,7 @@ class WebAutoLogin {
                     LogDebug("[일지준비] 조회용 브라우저 준비 실패")
                     return false
                 }
-                return this._NavToWorkLogView(cUIA, user)
+                return this._NavToWorkLogView(cUIA, user, targetDate)
             }
             return true
         }
@@ -165,13 +172,12 @@ class WebAutoLogin {
 
     ; ==============================================================================
     ; [메서드] LaunchLogSession
-    ; 설명: 쿠키 주입 후 Edge 브라우저를 실행하여 일지 작성/조회 창을 엽니다.
+    ; 설명: 쿠키 주입 후 Edge 브라우저를 실행하여 지정 기준일의 일지 작성/조회 창을 엽니다.
     ; ==============================================================================
-    static LaunchLogSession(user, mode := "mod", browserMode := "general", skipPopup := false) {
+    static LaunchLogSession(user, mode := "mod", targetDate := "", skipPopup := false) {
         launchTick := A_TickCount
-        LogDebug("[일지준비] LaunchLogSession 시작 | mode=" mode " | browserMode=" browserMode " | skipPopup=" skipPopup)
-        ; url 준비
-        targetUrl := ""
+        targetDate := this._ResolveWorkLogTargetDate(user, targetDate)
+        LogDebug("[일지준비] LaunchLogSession 시작 | mode=" mode " | targetDate=" targetDate " | skipPopup=" skipPopup)
         iljino := ""
 
         if (!skipPopup) {
@@ -186,7 +192,8 @@ class WebAutoLogin {
                         return false
                     user["arbpl"] := arbplinput.Value
                 }
-                iljino := headless.GetTodayWorkLogNumber(user["id"], user["arbpl"])
+                ; 조회와 팝업 검증에서 같은 근무 기준일을 사용하도록 날짜를 명시합니다.
+                iljino := headless.GetTodayWorkLogNumber(user["id"], user["arbpl"], targetDate)
                 LogDebug("[일지준비] 오늘자 일지번호 조회 완료 | found=" (iljino != "") " | elapsed=" (A_TickCount - launchTick) "ms")
 
                 if (iljino == "") {
@@ -195,19 +202,7 @@ class WebAutoLogin {
                     return false
                 }
 
-                targetUrl :=
-                    "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.erp.work_log.WorkLogReg"
-                    . "?I_MODE=MOD&V_ILJINO=" iljino "&V_SABUN=" user["id"]
-            } else if (mode == "reg") {
-                today := FormatTime(DateAdd(A_Now, -9, "Hours"), "yyyy-MM-dd")
-                targetUrl :=
-                    "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.erp.work_log.WorkLogReg"
-                    . "?I_MODE=REG&V_SABUN=" user["id"]
-                    . "&V_ARBPL01=" user["arbpl"]
-                    . "&I_ARWRK=5010"
-                    . "&I_GIJUNDF=" today
-                    . "&I_GIJUNDT=" today
-            } else {
+            } else if (mode != "reg") {
                 return false
             }
         }
@@ -216,13 +211,7 @@ class WebAutoLogin {
         edgePath := "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
         profile := A_Temp "\edge_cookie_profile" A_TickCount
         args := ' --remote-debugging-port=9222 --user-data-dir="' profile '"'
-            . ' --no-first-run --no-default-browser-check --disable-default-apps'
-
-        if (browserMode == "app") {
-            args .= ' "data:text/html;charset=utf-8,Loading..."'
-        } else {
-            args .= ' about:blank'
-        }
+            . ' --no-first-run --no-default-browser-check --disable-default-apps about:blank'
 
         ; 9222 포트가 이미 열려있는지 확인
         isConnected := false
@@ -299,16 +288,6 @@ class WebAutoLogin {
                 page.Call("Network.enable")
                 page.Call("Network.setCookies", Map("cookies", cookieParams))
                 LogDebug("[일지준비] CDP 쿠키 주입 완료 | elapsed=" (A_TickCount - launchTick) "ms")
-
-                if (browserMode == "app") {
-                    js := Format(
-                        "window.open('{1}', '_blank', 'width=1024,height=760,menubar=no,toolbar=no,location=yes,status=yes,scrollbars=yes,resizable=yes');",
-                        targetUrl)
-                    page.Evaluate(js)
-                    Sleep(500)
-                    page.Call("Page.close")
-
-                } else {
 
                     ; [Fetch 인터셉터 셋업]
                     sabun := user.Has("id") ? user["id"] : ""
@@ -419,7 +398,6 @@ class WebAutoLogin {
 
                     page.Evaluate(js)
                     LogDebug("[일지팝업] JavaScript 호출 감시 시작 | mode=" mode " | timeout=5000ms | elapsed=" (A_TickCount - launchTick) "ms")
-                }
             } else {
                 LogDebug("[오류] 일지준비 제어 대상 CDP 페이지를 찾지 못함 | elapsed=" (A_TickCount - launchTick) "ms")
             }
@@ -436,7 +414,7 @@ class WebAutoLogin {
         popupTick := A_TickCount
         loop 50 {
             Sleep 100
-            if cUIA := this._FindBrowserByElement(false) {
+            if cUIA := this._FindBrowserByElement(targetDate) {
                 LogDebug("[일지팝업] 팝업 UIA 연결 성공 | mode=" mode " | elapsed=" (A_TickCount - popupTick) "ms | total=" (A_TickCount - launchTick) "ms | hwnd=" cUIA.BrowserId)
                 return cUIA
             }
@@ -444,7 +422,7 @@ class WebAutoLogin {
         jsTrace := "조회 실패"
         try jsTrace := page.Evaluate("JSON.stringify(window.__workLogPopupTrace || {state:'trace_missing'})")["value"]
         LogDebug("[일지팝업] JavaScript 최종 상태 | " jsTrace)
-        this._LogWorkLogBrowserSnapshot(false, "CDP 팝업 타임아웃")
+        this._LogWorkLogBrowserSnapshot(targetDate, "CDP 팝업 타임아웃")
         LogDebug("[오류] 일지 상세창(팝업) 호출 시간 초과 - cUIA 연결 실패 | timeout=5000ms | total=" (A_TickCount - launchTick) "ms")
         MsgBox("일지 상세창(팝업) 호출 시간 초과`ncUIA 연결 실패", "알림", "Iconx")
         return false
@@ -538,10 +516,38 @@ class WebAutoLogin {
     }
 
     ; ==============================================================================
-    ; [내부] _FindBrowserByElement (단순 레거시 복원)
-    ; 설명: 현재 띄워진 브라우저 창들 중 "부산교통공사" 타이틀이면서 당일자 일지가 열린 탭을 탐색
+    ; [내부] _ResolveWorkLogTargetDate / _FormatWorkLogDate
+    ; 설명: 업무일지 전 과정에서 사용할 근무 기준일을 yyyyMMdd로 정규화합니다.
+    ;       호출자가 날짜를 생략하면 현재 사용자의 교대 컨텍스트로 계산합니다.
     ; ==============================================================================
-    static _FindBrowserByElement(create := false) {
+    static _ResolveWorkLogTargetDate(user, targetDate := "") {
+        normalizedDate := StrReplace(Trim(targetDate), "-", "")
+        if RegExMatch(normalizedDate, "^\d{8}$")
+            return normalizedDate
+
+        if (targetDate != "")
+            LogDebug("[일지준비] 잘못된 targetDate를 교대 컨텍스트 날짜로 대체 | value=" targetDate)
+
+        userTeam := user.Has("team") ? user["team"] : ""
+        context := WorkLogManager.GetCurrentContext(userTeam)
+        return context["date"]
+    }
+
+    static _FormatWorkLogDate(targetDate) {
+        normalizedDate := StrReplace(Trim(targetDate), "-", "")
+        if !RegExMatch(normalizedDate, "^\d{8}$")
+            throw Error("올바르지 않은 업무일지 기준일: " targetDate)
+
+        return SubStr(normalizedDate, 1, 4) "-" SubStr(normalizedDate, 5, 2) "-" SubStr(normalizedDate, 7, 2)
+    }
+
+    ; ==============================================================================
+    ; [내부] _FindBrowserByElement
+    ; 설명: CDP/레거시 경로에서 열린 브라우저 창을 공통 탐색하고, 전달받은
+    ;       근무 기준일의 업무일지 상세 팝업을 UIA 객체로 반환합니다.
+    ; ==============================================================================
+    static _FindBrowserByElement(targetDate) {
+        expectedDate := this._FormatWorkLogDate(targetDate)
         targetBrowsers := ["msedge.exe", "chrome.exe", "whale.exe"]
         for exe in targetBrowsers {
             if !ProcessExist(exe)
@@ -555,8 +561,7 @@ class WebAutoLogin {
                     continue
                 try {
                     cUIA := UIA_Browser("ahk_id " hwnd)
-                    nowDate := FormatTime(DateAdd(A_Now, create ? 0 : -9, "Hours"), "yyyy-MM-dd")
-                    if cUIA.FindElement({ AutomationId: "I_GIJUND", Value: nowDate }) {
+                    if cUIA.FindElement({ AutomationId: "I_GIJUND", Value: expectedDate }) {
                         WinRestore("ahk_id " hwnd)
                         WinActivate("ahk_id " hwnd)
                         return cUIA
@@ -567,12 +572,13 @@ class WebAutoLogin {
         return false
     }
 
-    ; 업무일지 팝업 탐색 실패 시 브라우저/UIA 상태를 한 번에 기록합니다.
-    static _LogWorkLogBrowserSnapshot(create := false, reason := "") {
-        expectedDate := FormatTime(DateAdd(A_Now, create ? 0 : -9, "Hours"), "yyyy-MM-dd")
+    ; 업무일지 팝업 탐색 실패 시 실제 탐색에 사용한 기준일과 브라우저/UIA
+    ; 상태를 함께 기록하여 팝업 미생성과 날짜 불일치를 구분합니다.
+    static _LogWorkLogBrowserSnapshot(targetDate, reason := "") {
+        expectedDate := this._FormatWorkLogDate(targetDate)
         targetBrowsers := ["msedge.exe", "chrome.exe", "whale.exe"]
         browserCount := 0
-        LogDebug("[일지팝업진단] 스냅샷 시작 | reason=" reason " | create=" create " | expectedDate=" expectedDate)
+        LogDebug("[일지팝업진단] 스냅샷 시작 | reason=" reason " | targetDate=" targetDate " | expectedDate=" expectedDate)
 
         for exe in targetBrowsers {
             if !ProcessExist(exe) {
@@ -699,15 +705,14 @@ class WebAutoLogin {
     ; ==============================================================================
     ; [내부] _NavToWorkLogView
     ; ==============================================================================
-    static _NavToWorkLogView(cUIA, user) {
+    static _NavToWorkLogView(cUIA, user, targetDate) {
         navTick := A_TickCount
-        LogDebug("[일지준비] 레거시 조회 화면 이동 시작")
+        LogDebug("[일지준비] 레거시 조회 화면 이동 시작 | targetDate=" targetDate)
         try {
             if !this._GoToWorklogList(cUIA) {
                 LogDebug("[일지준비] 레거시 조회 목록 이동 실패 | elapsed=" (A_TickCount - navTick) "ms")
                 return false
             }
-            targetDate := FormatTime(DateAdd(A_Now, -9, "Hours"), "yyyyMMdd")
             dept := user.Has("department") ? user["department"] : "호포전기분소"
             targetName := targetDate " " dept " 업무일지"
 
@@ -727,14 +732,14 @@ class WebAutoLogin {
             popupTick := A_TickCount
             LogDebug("[일지팝업] 조회 팝업 UIA 탐색 시작 | timeout=5000ms")
             loop 20 {
-                if cBrowser := this._FindBrowserByElement(false) {
+                if cBrowser := this._FindBrowserByElement(targetDate) {
                     LogDebug("[일지팝업] 조회 팝업 UIA 탐색 성공 | elapsed=" (A_TickCount - popupTick) "ms | hwnd=" cBrowser.BrowserId)
                     return cBrowser
                 }
                 Sleep 250
             }
             LogDebug("[오류] 업무일지 조회 팝업창을 찾을 수 없음 | elapsed=" (A_TickCount - popupTick) "ms")
-            this._LogWorkLogBrowserSnapshot(false, "레거시 조회 팝업 타임아웃")
+            this._LogWorkLogBrowserSnapshot(targetDate, "레거시 조회 팝업 타임아웃")
             MsgBox("업무일지 조회 팝업창을 찾을 수 없습니다.", "오류", "Iconx")
             return false
         } catch as e {

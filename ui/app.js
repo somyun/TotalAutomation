@@ -1114,11 +1114,6 @@ function loadSettingsToUI() {
     const hotkeys = user.hotkeys || [];
     renderHotkeyTable(hotkeys);
 
-    // Presets (Track Access)
-    try {
-        renderPresetList(user.presets || {});
-    } catch (e) { console.error("Error rendering presets:", e); }
-
     // --- NEW: Load Daily Log Defaults ---
     const defaults = user.dailyLogDefaults || {};
 
@@ -1826,26 +1821,6 @@ function renderKeycap(keyStr) {
     parts.push(`<kbd>${mainKey.toUpperCase()}</kbd>`);
 
     return parts.join('+'); // Removed spaces around + for tighter look
-}
-
-// --- Preset Logic ---
-function renderPresetList(presetsMap) {
-    const sel = document.getElementById('track-preset-sel'); // Fixed ID
-    if (!sel) return; // Guard against missing element
-    sel.innerHTML = '<option value="">(새 프리셋)</option>';
-    if (!presetsMap) return;
-
-    // If presetsMap is array (from v3 structure update?) or object
-    // Assuming object for now based on legacy code or map
-    // Check if array
-    let list = Array.isArray(presetsMap) ? presetsMap : Object.keys(presetsMap).map(k => presetsMap[k]);
-
-    list.forEach(p => {
-        const opt = document.createElement('option');
-        opt.value = p.name;
-        opt.text = p.name;
-        sel.appendChild(opt);
-    });
 }
 
 // --- Utils ---
@@ -2875,13 +2850,22 @@ window.startWorkLog = startWorkLog;
 window.toggleDrinkCalibration = toggleDrinkCalibration;
 
 // --- Helper: Preset Management ---
-function getUserPresets(type) {
-    const uid = selectedUserId;
-    if (!uid || !appConfig.users || !appConfig.users[uid]) return {};
+function getUserPresetSource(type) {
+    const uid = String(selectedUserId || '').trim();
+    if (!uid || !appConfig.users || !appConfig.users[uid]) return null;
+
     const user = appConfig.users[uid];
-    if (type === 'track') return user.trackPresets || {};
-    if (type === 'vehicle') return user.vehiclePresets || {};
-    return {};
+    const presets = type === 'track'
+        ? user.trackPresets
+        : type === 'vehicle'
+            ? user.vehiclePresets
+            : null;
+
+    return presets && typeof presets === 'object' && !Array.isArray(presets) ? presets : {};
+}
+
+function getUserPresets(type) {
+    return getUserPresetSource(type) || {};
 }
 
 function saveUserPresets(type, presets) {
@@ -2950,6 +2934,7 @@ const TRACK_ACCESS_DEFAULTS = Object.freeze({
 
 const trackAccessState = Vue.reactive({
     presets: {},
+    presetRenderKey: 0,
     selectedPreset: '__NEW__',
     form: { ...TRACK_ACCESS_DEFAULTS },
     workerPicker: { isOpen: false, role: '', selectedIndex: -1 },
@@ -3074,18 +3059,24 @@ function initTrackAccessApp() {
 }
 
 function syncTrackPresets(forceLoad = false) {
-    const presets = getUserPresets('track');
+    const presets = getUserPresetSource('track');
+    // 로그인 사용자 또는 설정이 아직 준비되지 않은 순간에는 기존 목록을 지우지 않는다.
+    if (presets === null) return;
+
     const keys = Object.keys(presets);
     const current = trackAccessState.selectedPreset;
-    const ownerChanged = trackAccessState.ownerId !== selectedUserId;
+    const ownerId = String(selectedUserId || '').trim();
+    const ownerChanged = trackAccessState.ownerId !== ownerId;
     trackAccessState.presets = { ...presets };
+    // 과거 코드나 브라우저 복원 과정에서 option DOM이 직접 변경됐더라도 확실히 재구성한다.
+    trackAccessState.presetRenderKey += 1;
 
     let next = '__NEW__';
     if (keys.length > 0) next = presets[current] ? current : keys[0];
     const shouldLoad = forceLoad || ownerChanged || !trackAccessState.hasSyncedPresets || next !== current;
     trackAccessState.selectedPreset = next;
     trackAccessState.hasSyncedPresets = true;
-    trackAccessState.ownerId = selectedUserId;
+    trackAccessState.ownerId = ownerId;
     if (shouldLoad) loadTrackPreset();
 }
 

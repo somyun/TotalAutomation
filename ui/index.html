@@ -539,7 +539,8 @@
                     <div class="header-row">
                         <h1>선로출입관리</h1>
                         <div class="preset-controls">
-                            <select id="track-preset-sel" class="preset-select" v-model="track.selectedPreset"
+                            <select id="track-preset-sel" class="preset-select" :key="track.presetRenderKey"
+                                v-model="track.selectedPreset"
                                 @change="loadPreset" @dblclick="renamePreset">
                                 <option v-for="(_, name) in track.presets" :key="name" :value="name">{{ name }}</option>
                                 <option value="__NEW__">+ 새 프리셋 추가</option>

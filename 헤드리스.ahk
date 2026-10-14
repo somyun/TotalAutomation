@@ -275,87 +275,57 @@ class HeadlessAutomation {
     ; ==============================================================================
     ; 점검장소 목록 조회 (Import)
     ; ==============================================================================
-    GetImportLocations(arbpl) {
-        this._Log("점검장소 목록 조회 요청 (" arbpl ", HTTP)...")
-
-        ; 날짜 계산
-        frDayStr := FormatTime(DateAdd(A_Now, -4, "days"), "yyyyMMdd")
-        toDayStr := FormatTime(DateAdd(A_Now, -1, "days"), "yyyyMMdd")
-
-        payload := Map(
-            "AJAX_TYPE", [Map(
-                "MODE", "OPN", "TYPE", "SPC", "RFC_NAME", "ZPM_RFC_REPORT_AFRU_LIST",
-                "I_ARBPL", arbpl, "I_WERKS", "5010", "I_FRDAY", frDayStr,
-                "I_FRTIME", "090000", "I_TODAY", toDayStr, "I_TOTIME", "085900"
-            )]
-        )
-
-        responseText := this._SendRequest(payload,
-            "http://ep.humetro.busan.kr/irj/servlet/prt/portal/prtroot/kr.busan.humetro.cbo.erp.work_log.WorkLogDtlData",
-            "application/x-www-form-urlencoded")
-
+    ; RFC 오더 응답을 기존 점검장소명·구분 규칙으로 변환한다.
+    static LocationsFromOrders(rows) {
         locations := []
-        if (responseText == "") {
-            return locations
-        }
+        for item in rows {
+            auart := item["ORDER_TYPE"]
+            if !(auart == "PM01" || auart == "PM03" || auart == "PM06")
+                continue
 
-        try {
-            result := JSON.parse(responseText)
-            if (result.Has("ZPM_RFC_REPORT_AFRU_LIST")) {
-                listData := result["ZPM_RFC_REPORT_AFRU_LIST"]
-                for item in listData {
-                    auart := item.Has("AUART") ? item["AUART"] : ""
-                    if !(auart == "PM01" || auart == "PM03")
-                        continue
+            aufnr := item["ORDERID"]
+            order := LTrim(aufnr, "0")
 
-                    aufnr := item.Has("AUFNR") ? item["AUFNR"] : ""
-                    order := LTrim(aufnr, "0")
+            ktext := item["SHORT_TEXT"]
+            erdat := item["ENTER_DATE"]
 
-                    ktext := item.Has("KTEXT") ? item["KTEXT"] : ""
-                    erdat := item.Has("ERDAT") ? item["ERDAT"] : ""
+            erdatRaw := RegExReplace(erdat, "-")
+            if (erdatRaw == "" || erdatRaw == "00000000")
+                erdatRaw := FormatTime(A_Now, "yyyyMMdd")
 
-                    erdatRaw := RegExReplace(erdat, "-")
-                    if (erdatRaw == "")
-                        erdatRaw := FormatTime(A_Now, "yyyyMMdd")
+            ; 19990101 기준 일수 차이 계산 후 mod 3 + 1
+            diffDays := DateDiff(erdatRaw, "19990101", "Days")
+            groupNum := Mod(diffDays, 3) + 1
 
-                    ; 19990101 기준 일수 차이 계산 후 mod 3 + 1
-                    diffDays := DateDiff(erdatRaw, "19990101", "Days")
-                    groupNum := Mod(diffDays, 3) + 1
+            typeStr := ""
+            nameStr := ""
+            isOther := false
 
-                    typeStr := ""
-                    nameStr := ""
-                    isOther := false
-
-                    if (auart == "PM01") {
-                        if RegExMatch(ktext, "i)일일.*\((\d+)KV\).*?_([^-_]+)변전소", &match) {
-                            nameStr := match[2] . match[1]
-                            typeStr := "변전소"
-                        } else if RegExMatch(ktext, "i)_([^-_]+)전기실", &match) {
-                            nameStr := match[1]
-                            typeStr := "전기실(그룹" . groupNum . ")"
-                        } else {
-                            isOther := true
-                        }
-                    } else if (auart == "PM03") {
-                        isOther := true
-                    }
-
-                    if (isOther) {
-                        cleanText := RegExReplace(ktext, "i)[가-힣]+(분소|관리소|주재소)", "")
-                        cleanText := RegExReplace(cleanText, "i)일일|일상|점검|전차선로|\(|\)|_", "")
-                        cleanText := RegExReplace(cleanText, "\s+", " ")
-                        nameStr := Trim(cleanText)
-                        typeStr := "기타업무"
-                    }
-
-                    ; 중복 필터링은 프론트에서 처리하므로 전체 반환
-                    locations.Push(Map("name", nameStr, "type", typeStr, "order", order))
+            if (auart == "PM01") {
+                if RegExMatch(ktext, "i)일일.*\((\d+)KV\).*?_([^-_]+)변전소", &match) {
+                    nameStr := match[2] . match[1]
+                    typeStr := "변전소"
+                } else if RegExMatch(ktext, "i)_([^-_]+)전기실", &match) {
+                    nameStr := match[1]
+                    typeStr := "전기실(그룹" . groupNum . ")"
+                } else {
+                    isOther := true
                 }
+            } else if (auart == "PM03" || auart == "PM06") {
+                isOther := true
             }
-        } catch as e {
-            this._Log("점검장소 파싱 오류: " e.Message)
-        }
 
+            if (isOther) {
+                cleanText := RegExReplace(ktext, "i)[가-힣]+(분소|관리소|주재소)", "")
+                ; 구분자는 새 항목 추가 시 공백으로 치환하므로 여기서는 보존한다.
+                cleanText := RegExReplace(cleanText, "i)일일|일상|점검|전차선로|\(|\)", "")
+                cleanText := RegExReplace(cleanText, "\s+", " ")
+                nameStr := Trim(cleanText)
+                typeStr := "기타업무"
+            }
+
+            locations.Push(Map("name", nameStr, "type", typeStr, "order", order))
+        }
         return locations
     }
 

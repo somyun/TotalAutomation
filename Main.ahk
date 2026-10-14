@@ -1,5 +1,17 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Off
+; 배포 검사 모드: 설정/로그인/업데이트/UI 실행 없이 내장 RFC EXE만 추출·검증한다.
+if A_Args.Length = 1 && A_Args[1] = "--verify-sap-package" {
+    try {
+        ; 릴리스 빌드는 SAPRFC.exe 자체 버전 검사를 먼저 수행한다.
+        ; 여기서는 중첩 프로세스 실행 없이 내장 파일의 추출 가능 여부만 확인한다.
+        InstallSapRfcHelper(false)
+        ExitApp(0)
+    } catch as err {
+        try FileAppend(err.Message "`n", A_ScriptDir "\package-verification-error.log", "UTF-8")
+        ExitApp(1)
+    }
+}
 DetectHiddenWindows True
 SetTitleMatchMode 3
 hMutex := DllCall("CreateMutex", "ptr", 0, "int", false, "str", "통합자동화 ahk_exe main.exe", "ptr")
@@ -44,18 +56,22 @@ SetTitleMatchMode 2
 #Include "ERP점검.ahk"
 #Include "설정관리.ahk"
 #Include "헤드리스.ahk"
+#Include "Lib\LocationImportService.ahk"
+#Include "Lib\SapRfcRelease.ahk"
+#Include "Lib\SapRfcService.ahk"
+#Include "Lib\MaterialLocationService.ahk"
 
 ; ==============================================================================
 ; 컴파일러 지시문
 ; ==============================================================================
-;@Ahk2Exe-SetVersion 3.5.91.0
-;@Ahk2Exe-SetProductVersion v3.5.91
+;@Ahk2Exe-SetVersion 3.6.0.0
+;@Ahk2Exe-SetProductVersion v3.6.0
 ;@Ahk2Exe-SetDescription 통합자동화
 ; ==============================================================================
 ; ==============================================================================
 ; 초기화
 ; ==============================================================================
-global AppVersion := "v3.5.91"
+global AppVersion := "v3.6.0"
 global wvc := ""
 global wv := ""
 global MainGui := ""
@@ -107,9 +123,18 @@ CleanupLegacyFiles()
 ; 이를 통해 Main.exe만 배포해도 모든 구성요소가 자동으로 업데이트됩니다.
 if (A_IsCompiled) {
     try {
+        InstallSapRfcHelper()
+    } catch {
+        SapRfcService.Ready := false
+        MsgBox("SAPRFC.exe 설치 또는 버전 확인에 실패했습니다. SAP 조회 종료 후 프로그램을 다시 실행해주세요.", "SAP 조회 모듈 설치 오류", "Iconx")
+    }
+    try {
         ; 1. 실행 파일 (updater.exe, 세션BG.exe)
         FileInstall("Updater.exe", A_ScriptDir "\Updater.exe", 1)
         FileInstall("세션BG.exe", A_ScriptDir "\세션BG.exe", 1)
+        if !DirExist(A_ScriptDir "\Lib")
+            DirCreate(A_ScriptDir "\Lib")
+        FileInstall("Lib\JSON.ahk", A_ScriptDir "\Lib\JSON.ahk", 1)
 
         ; 2. 라이브러리 (DLL)
         if !DirExist(A_ScriptDir "\Lib\64bit")
@@ -137,6 +162,16 @@ if (A_IsCompiled) {
         ; 파일 사용 중 등으로 실패할 경우 로그만 남기고 진행 (치명적이지 않음)
         LogDebug("내장 파일 추출 경고: " e.Message)
     }
+}
+
+InstallSapRfcHelper(verifyHelper := true) {
+    SapRfcService.Ready := false
+    if ProcessExist("SAPRFC.exe")
+        throw Error("실행 중인 SAP 조회가 있습니다.")
+    FileInstall("SAPRFC.exe", A_ScriptDir "\SAPRFC.exe", 1)
+    if verifyHelper
+        SapRfcService.VerifyHelper()
+    SapRfcService.Ready := true
 }
 
 ; 업데이트 확인 (차단 대기) - 컴파일된 경우(프로덕션 모드)에만 실행
@@ -529,7 +564,7 @@ OnWebMessage(sender, args) {
         requestId := msg.Has("requestId") ? msg["requestId"] : ""
         question := msg.Has("question") ? msg["question"] : "위 내용으로 클라우드에 내보내기 하시겠습니까?"
         ShowSettingsConfirmationWindow(text, title, requestId, question)
-    } else if (command == "confirmWorkerImport") {
+    } else if (command == "confirmWorkerImport" || command == "confirmLocationImport") {
         text := msg.Has("text") ? msg["text"] : ""
         title := msg.Has("title") ? msg["title"] : "작업자 불러오기 확인"
         requestId := msg.Has("requestId") ? msg["requestId"] : ""
@@ -736,33 +771,71 @@ OnWebMessage(sender, args) {
         arbpl := msg.Has("arbpl") ? msg["arbpl"] : "5129"
         ImportWorkersAndNotify(arbpl)
     }
-    ; --- 7-3. 점검장소 불러오기 (Headless) ---
-    else if (command == "importLocations") {
-        LogDebug("점검장소 불러오기 요청 수신")
+    ; --- 7-3. 작업장소 불러오기 (네이티브 SAP RFC, 조회 전용) ---
+    else if (command == "searchMaterialLocations") {
+        employeeId := ConfigManager.GetCurrentUserID()
+        requestId := msg.Has("requestId") ? msg["requestId"] : ""
         try {
-            LogDebug("Headless 연결 시도 (Attach Mode)...")
-            headless := HeadlessAutomation(true, LogDebug)
-
-            arbpl := msg.Has("arbpl") ? msg["arbpl"] : "5129"
-            LogDebug("작업장코드: " arbpl)
-
-            locations := headless.GetImportLocations(arbpl)
-            LogDebug("점검장소 조회 완료. 개수: " locations.Length)
-
-            if (locations.Length > 0) {
-                payload := Map("type", "updateLocationList", "data", locations)
-                wv.PostWebMessageAsJson(JSON.stringify(payload))
-                LogDebug("점검장소 불러오기 성공: " locations.Length "건")
-                MsgBox(locations.Length "건의 점검장소를 불러왔습니다.", "성공")
-            } else {
-                LogDebug("점검장소 목록이 비어있음")
-                LogDebug("[오류] 불러올 점검장소가 없거나 조회 실패 (MsgBox 표시)")
-                MsgBox("불러올 점검장소가 없거나 조회에 실패했습니다.")
-            }
+            if employeeId = "" || !SessionManager.IsReady(employeeId)
+                || !msg.Has("employeeId") || msg["employeeId"] != employeeId
+                throw Error("로그인 세션을 확인해주세요.")
+            rows := MaterialLocationService.Query(employeeId, msg["locations"], msg["search"])
+            if ConfigManager.GetCurrentUserID() != employeeId || !SessionManager.IsReady(employeeId)
+                throw Error("조회 중 로그인 사용자가 변경되었습니다.")
+            wv.PostWebMessageAsJson(JSON.stringify(Map("type", "materialLocationResult", "employeeId", employeeId,
+                "requestId", requestId, "rows", rows)))
         } catch as e {
-            LogDebug("Headless 오류 (importLocations): " e.Message)
-            LogDebug("[오류] 점검장소 조회 실패 (MsgBox 표시): " e.Message)
-            MsgBox("조회 실패: " e.Message)
+            wv.PostWebMessageAsJson(JSON.stringify(Map("type", "materialLocationResult", "employeeId", employeeId,
+                "requestId", requestId, "error", e.Message)))
+        }
+    }
+    else if (command == "importLocations") {
+        employeeId := ConfigManager.GetCurrentUserID()
+        requestId := msg.Has("requestId") ? msg["requestId"] : ""
+        try {
+            if employeeId = "" || !SessionManager.IsReady(employeeId)
+                throw Error("로그인 세션이 준비되지 않았습니다. 다시 로그인해주세요.")
+            if !msg.Has("employeeId") || msg["employeeId"] != employeeId
+                throw Error("로그인 사용자가 변경되었습니다. 다시 불러와주세요.")
+            profile := ConfigManager.CurrentUser
+            arbpl := profile.Has("arbpl") ? profile["arbpl"] : ""
+            if arbpl = ""
+                throw Error("로그인 사용자의 작업장 번호가 설정되지 않았습니다.")
+            rows := LocationImportService.Query(arbpl, employeeId)
+            if ConfigManager.GetCurrentUserID() != employeeId || !SessionManager.IsReady(employeeId)
+                throw Error("조회 중 로그인 사용자가 변경되었습니다. 다시 불러와주세요.")
+            locations := HeadlessAutomation.LocationsFromOrders(rows)
+            wv.PostWebMessageAsJson(JSON.stringify(Map("type", "updateLocationList", "data", locations,
+                "employeeId", employeeId, "requestId", requestId)))
+            LogDebug("SAP RFC 작업장소 조회 완료: " locations.Length "건")
+        } catch as e {
+            LogDebug("작업장소 조회 실패: " e.Message)
+            wv.PostWebMessageAsJson(JSON.stringify(Map("type", "locationImportFailed",
+                "employeeId", employeeId, "requestId", requestId)))
+            MsgBox("작업장소 조회 실패: " e.Message, "작업장소 불러오기 오류", "Iconx")
+        }
+    }
+    else if (command == "checkLocationOrders") {
+        employeeId := ConfigManager.GetCurrentUserID()
+        requestId := msg.Has("requestId") ? msg["requestId"] : ""
+        try {
+            if employeeId = "" || !SessionManager.IsReady(employeeId)
+                || !msg.Has("employeeId") || msg["employeeId"] != employeeId
+                throw Error("로그인 세션 또는 사용자가 변경되었습니다.")
+            profile := ConfigManager.CurrentUser
+            arbpl := profile.Has("arbpl") ? profile["arbpl"] : ""
+            if !msg.Has("orders") || !(msg["orders"] is Array)
+                throw Error("점검장소 오더번호 목록이 없습니다.")
+            result := LocationImportService.Maintenance(arbpl, employeeId, msg["orders"])
+            if ConfigManager.GetCurrentUserID() != employeeId || !SessionManager.IsReady(employeeId)
+                throw Error("조회 중 로그인 사용자가 변경되었습니다.")
+            wv.PostWebMessageAsJson(JSON.stringify(Map("type", "locationOrderMaintenanceResult",
+                "employeeId", employeeId, "requestId", requestId, "data", result)))
+        } catch as e {
+            ; 자동 조회 실패는 목록을 보존하고 다음 로그인에서 재시도한다.
+            LogDebug("[점검장소 자동 확인] " e.Message)
+            wv.PostWebMessageAsJson(JSON.stringify(Map("type", "locationOrderMaintenanceResult",
+                "employeeId", employeeId, "requestId", requestId, "error", true)))
         }
     }
     ; --- 8. 설정창 닫힘 (UI 갱신 요청) ---
@@ -1316,7 +1389,17 @@ RunPendingAutoImportWorkers(session) {
     }
 
     ; RequestGuntaeData가 완료된 뒤 다음 AHK 실행 기회에 작업자 조회를 시작한다.
-    SetTimer(() => ImportWorkersAndNotify(pending.Arbpl, true, pending.EmployeeId), -1)
+    SetTimer(() => RunLoginListChecks(pending), -1)
+}
+
+RunLoginListChecks(pending) {
+    global wv
+    try ImportWorkersAndNotify(pending.Arbpl, true, pending.EmployeeId)
+    finally {
+        if SessionManager.IsReady(pending.EmployeeId) && ConfigManager.GetCurrentUserID() = pending.EmployeeId
+            wv.PostWebMessageAsJson(JSON.stringify(Map("type", "locationOrderMaintenanceReady",
+                "employeeId", pending.EmployeeId)))
+    }
 }
 
 ImportWorkersAndNotify(arbpl, automatic := false, employeeId := "") {

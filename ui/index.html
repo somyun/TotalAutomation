@@ -11,17 +11,17 @@
 
 <body>
     <!-- Custom Title Bar -->
-    <div id="title-bar">
-        <div id="title-drag-area">
-            <span id="app-title">통합자동화</span>
+    <div id="title-bar" v-cloak>
+        <div id="title-drag-area" @mousedown="drag">
+            <span id="app-title">{{ shell.title }}</span>
         </div>
         <div id="window-controls">
-            <div class="control-btn" id="btn-min" onclick="window.minimizeWindow()">
+            <div class="control-btn" id="btn-min" @click.stop="minimize">
                 <svg viewBox="0 0 10 1">
                     <path d="M0 0h10v1H0z" />
                 </svg>
             </div>
-            <div class="control-btn close-btn" id="btn-close" onclick="window.closeWindow()">
+            <div class="control-btn close-btn" id="btn-close" @click.stop="close">
                 <svg viewBox="0 0 10 10">
                     <path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1.2" />
                 </svg>
@@ -30,156 +30,151 @@
     </div>
 
     <!-- Login Container -->
-    <div id="login-container">
-
-        <!-- View 1: User Selection -->
-        <div id="login-view" class="login-card">
+    <div id="login-container" v-cloak>
+        <div id="login-view" class="login-card" v-show="auth.view === 'users'">
             <h2>사용자 선택</h2>
             <div id="user-list-container">
-                <!-- Javascript populated -->
+                <div v-if="auth.users.length === 0" style="padding:20px; text-align:center; color:#888;">
+                    등록된 사용자가 없습니다.
+                </div>
+                <div v-for="user in auth.users" :key="user.id" class="user-item"
+                    :class="{ selected: String(auth.selectedId) === String(user.id) }"
+                    :data-id="user.id" @click="select(user.id)" @dblclick="selectAndContinue(user.id)">
+                    <div class="user-info"><span class="user-name">{{ user.name }}</span>
+                        <span class="user-id">({{ user.id }})</span></div>
+                </div>
             </div>
             <div class="login-footer">
-                <button id="btn-next" class="primary-btn" onclick="moveToPasswordView()"
-                    style="width:100%; margin-bottom:10px;" disabled>다음</button>
+                <button id="btn-next" class="primary-btn" @click="next"
+                    style="width:100%; margin-bottom:10px;" :disabled="!auth.selectedId">다음</button>
                 <div style="display:flex; gap:10px; width:100%;">
-                    <button class="secondary-btn small" onclick="switchView('add')" style="flex:1;">+ 새 사용자</button>
-                    <button id="btn-delete" class="secondary-btn small danger" onclick="deleteUser()" style="flex:1;"
-                        disabled>삭제</button>
+                    <button class="secondary-btn small" @click="showAdd" style="flex:1;">+ 새 사용자</button>
+                    <button id="btn-delete" class="secondary-btn small danger" @click="remove"
+                        style="flex:1;" :disabled="!auth.selectedId">삭제</button>
                 </div>
             </div>
         </div>
 
-        <!-- View 1.5: Password Entry (Modal-like) -->
-        <div id="password-view" class="login-card" style="display: none; position: relative;">
-            <button class="icon-back-btn" onclick="backToUserList()" title="뒤로가기">
+        <div id="password-view" class="login-card" v-show="auth.view === 'password'" style="position:relative;">
+            <button class="icon-back-btn" @click="back" title="뒤로가기">
                 <svg viewBox="0 0 24 24" width="24" height="24">
                     <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" fill="currentColor" />
                 </svg>
             </button>
-
-            <h2 id="pwd-user-name" style="margin-top: 20px;">User Name</h2>
-            <p id="pwd-user-id" style="text-align:center; color:#666; margin-top:-10px;">(User ID)</p>
-
-            <div class="login-input-area" style="width: 100%; margin: 20px 0;">
-                <input type="password" id="login-pw2" placeholder="2차 비밀번호를 입력하세요" class="full-width-input"
-                    onkeydown="handleLoginKey(event)">
+            <h2 id="pwd-user-name" style="margin-top:20px;">{{ selectedUser?.name || '' }}</h2>
+            <p id="pwd-user-id" style="text-align:center; color:#666; margin-top:-10px;">({{ selectedUser?.id || '' }})</p>
+            <div class="login-input-area" style="width:100%; margin:20px 0;">
+                <input type="password" id="login-pw2" placeholder="2차 비밀번호를 입력하세요"
+                    class="full-width-input" :value="auth.loginPw" maxlength="6"
+                    @input="loginPwInput" @keydown.enter="login">
             </div>
-
-            <div class="login-actions" style="justify-content: center; display: flex;">
-                <button class="primary-btn" onclick="tryLogin()" style="width: 100%;">로그인</button>
+            <div class="login-actions" style="justify-content:center; display:flex;">
+                <button class="primary-btn" @click="login" style="width:100%;">로그인</button>
             </div>
         </div>
 
-        <!-- View 2: Add User (Registration) -->
-        <div id="add-user-view" style="display: none;">
+        <div id="add-user-view" v-show="auth.view === 'add'">
             <h3>새 사용자 등록</h3>
             <div class="form-row">
-                <div class="form-group"><label>이름 *</label><input type="text" id="new-name"></div>
-                <div class="form-group"><label>사번 *</label><input type="text" id="new-id" maxlength="6"></div>
+                <div class="form-group"><label>이름 *</label><input type="text" id="new-name" v-model="auth.form.name"></div>
+                <div class="form-group"><label>사번 *</label><input type="text" id="new-id" maxlength="6"
+                    :value="auth.form.id" @input="numericFormInput('id', $event)"></div>
             </div>
-
             <div class="form-row">
                 <div class="form-group"><label>부서 *</label>
-                    <select id="new-dept" style="width: 100%;">
+                    <select id="new-dept" style="width:100%;" v-model="auth.form.department">
                         <option value="">선택하세요</option>
-                        <option value="5111" data-codeval="">동래변전분소</option>
-                        <option value="5112" data-codeval="">전포변전분소</option>
-                        <option value="5113" data-codeval="">구포변전분소</option>
-                        <option value="5121" data-codeval="">신평전기분소</option>
-                        <option value="5122" data-codeval="">부산진전기분소</option>
-                        <option value="5123" data-codeval="">동래전기분소</option>
-                        <option value="5124" data-codeval="">노포전기분소</option>
-                        <option value="5125" data-codeval="">장산전기분소</option>
-                        <option value="5126" data-codeval="">광안전기분소</option>
-                        <option value="5127" data-codeval="">전포전기분소</option>
-                        <option value="5128" data-codeval="">구명전기분소</option>
-                        <option value="5129" data-codeval="2612021">호포전기분소</option>
-                        <option value="5130" data-codeval="">미남전기분소</option>
-                        <option value="5131" data-codeval="">대저전기분소</option>
-                        <option value="5132" data-codeval="">다대전기관리소</option>
-                        <option value="5133" data-codeval="">남양산전기관리소</option>
+                        <option v-for="dept in departments" :key="dept.value" :value="dept.value">{{ dept.name }}</option>
                     </select>
                 </div>
                 <div class="form-group"><label>근무조 *</label>
-                    <select id="new-team" style="width: 100%;">
-                        <option>A조</option>
-                        <option>B조</option>
-                        <option>C조</option>
-                        <option>D조</option>
-                        <option>일근</option>
+                    <select id="new-team" style="width:100%;" v-model="auth.form.team">
+                        <option v-for="team in teams" :key="team" :value="team">{{ team }}</option>
                     </select>
                 </div>
             </div>
-
             <div class="form-row">
-                <div class="form-group"><label>통합 PW *</label><input type="password" id="new-webpw"></div>
-                <div class="form-group"><label>확인 *</label><input type="password" id="new-webpw2"></div>
+                <div class="form-group"><label>통합 PW *</label><input type="password" id="new-webpw" v-model="auth.form.webPW"></div>
+                <div class="form-group"><label :class="{ 'validation-success': webPasswordsMatch }">확인 *</label>
+                    <input type="password" id="new-webpw2" v-model="auth.form.webPWConfirm"
+                        :class="{ 'inputs-match': webPasswordsMatch, 'inputs-error': auth.form.webPWConfirm && !webPasswordsMatch }"></div>
             </div>
-
             <div class="form-row">
-                <div class="form-group"><label>2차 PW *</label><input type="password" id="new-pw2" maxlength="6"></div>
-                <div class="form-group"><label>확인 *</label><input type="password" id="new-pw2-confirm" maxlength="6">
-                </div>
+                <div class="form-group"><label>2차 PW *</label><input type="password" id="new-pw2" maxlength="6"
+                    :value="auth.form.pw2" @input="numericFormInput('pw2', $event)"></div>
+                <div class="form-group"><label :class="{ 'validation-success': secondPasswordsMatch }">확인 *</label>
+                    <input type="password" id="new-pw2-confirm" maxlength="6" :value="auth.form.pw2Confirm"
+                        @input="numericFormInput('pw2Confirm', $event)"
+                        :class="{ 'inputs-match': secondPasswordsMatch, 'inputs-error': auth.form.pw2Confirm && !secondPasswordsMatch }"></div>
             </div>
-
             <div class="form-row">
-                <div class="form-group"><label>SAP PW</label><input type="password" id="new-sappw"></div>
-                <div class="form-group"><label>확인</label><input type="password" id="new-sappw2"></div>
+                <div class="form-group"><label>SAP PW</label><input type="password" id="new-sappw" v-model="auth.form.sapPW"></div>
+                <div class="form-group"><label :class="{ 'validation-success': sapPasswordsMatch }">확인</label>
+                    <input type="password" id="new-sappw2" v-model="auth.form.sapPWConfirm"
+                        :class="{ 'inputs-match': sapPasswordsMatch, 'inputs-error': auth.form.sapPWConfirm && !sapPasswordsMatch }"></div>
             </div>
-
-            <div class="actions" style="margin-top: 10px;">
-                <button class="primary-btn" onclick="submitNewUser()">등록</button>
-                <button class="secondary-btn" onclick="switchView('login')">취소</button>
+            <div class="actions" style="margin-top:10px;">
+                <button class="primary-btn" @click="submit">등록</button>
+                <button class="secondary-btn" @click="cancelAdd">취소</button>
             </div>
         </div>
-
     </div>
 
     <!-- Main Container (Hidden Initially) -->
     <div id="app-container" style="display: none;">
         <!-- Sidebar -->
-        <nav id="sidebar">
+        <nav id="sidebar" v-cloak>
             <div class="nav-top">
-                <div class="menu-item active" data-target="view-work-log" onclick="switchMainTab('view-work-log')">
+                <div class="menu-item" :class="{ active: shell.activeMainTab === 'view-work-log' }"
+                    data-target="view-work-log" @click="openTab('view-work-log')">
                     <span class="icon">📅</span>
                     <span class="label">업무일지</span>
                 </div>
-                <div class="menu-item" data-target="view-erp-check" onclick="switchMainTab('view-erp-check')">
+                <div class="menu-item" :class="{ active: shell.activeMainTab === 'view-erp-check' }"
+                    data-target="view-erp-check" @click="openTab('view-erp-check')">
                     <span class="icon">📋</span>
                     <span class="label">ERP일일점검</span>
                 </div>
-                <div class="menu-item" data-target="view-track-access" onclick="switchMainTab('view-track-access')">
+                <div class="menu-item" :class="{ active: shell.activeMainTab === 'view-track-access' }"
+                    data-target="view-track-access" @click="openTab('view-track-access')">
                     <span class="icon">🚧</span>
                     <span class="label">선로출입관리</span>
                 </div>
-                <div class="menu-item" data-target="view-vehicle-log" onclick="switchMainTab('view-vehicle-log')">
+                <div class="menu-item" :class="{ active: shell.activeMainTab === 'view-vehicle-log' }"
+                    data-target="view-vehicle-log" @click="openTab('view-vehicle-log')">
                     <span class="icon">🚗</span>
                     <span class="label">차량운행일지</span>
+                </div>
+                <div class="menu-item" :class="{ active: shell.activeMainTab === 'view-material-location' }"
+                    data-target="view-material-location" @click="openTab('view-material-location')">
+                    <span class="icon">📦</span>
+                    <span class="label">적재위치조회</span>
                 </div>
             </div>
             <div class="nav-bottom">
                 <!-- Shift Status Panel -->
-                <div id="shift-status-panel" class="shift-panel" style="display:none;"> <!-- 초기 숨김 -->
+                <div id="shift-status-panel" class="shift-panel" v-show="shell.shift.visible">
                     <div class="shift-row">
                         <div class="shift-group">
-                            <div class="shift-date" id="shift-prev-date"></div>
-                            <div class="shift-item prev" id="shift-prev">D</div>
+                            <div class="shift-date" id="shift-prev-date">{{ shell.shift.prevDate }}</div>
+                            <div class="shift-item prev" id="shift-prev">{{ shell.shift.prev }}</div>
                         </div>
                         <div class="shift-arrow">→</div>
                         <div class="shift-group">
-                            <div class="shift-date" id="shift-current-date"></div>
-                            <div class="shift-item current" id="shift-current">C</div>
+                            <div class="shift-date" id="shift-current-date">{{ shell.shift.currentDate }}</div>
+                            <div class="shift-item current" id="shift-current">{{ shell.shift.current }}</div>
                         </div>
                         <div class="shift-arrow">→</div>
                         <div class="shift-group">
-                            <div class="shift-date" id="shift-next-date"></div>
-                            <div class="shift-item next" id="shift-next">B</div>
+                            <div class="shift-date" id="shift-next-date">{{ shell.shift.nextDate }}</div>
+                            <div class="shift-item next" id="shift-next">{{ shell.shift.next }}</div>
                         </div>
                     </div>
-                    <div class="shift-label" id="shift-label-text">야간</div>
+                    <div class="shift-label" id="shift-label-text"
+                        :style="{ color: shell.shift.isNight ? '#5e6c84' : '#d97008' }">{{ shell.shift.name }}</div>
                 </div>
 
-                <div class="menu-item settings-btn" onclick="openSettings()">
+                <div class="menu-item settings-btn" @click="settings">
                     <span class="icon">⚙️</span>
                     <span class="label">설정</span>
                 </div>
@@ -366,11 +361,12 @@
                 <div class="view-header">
                     <div class="header-row">
                         <h1>ERP일일점검</h1>
-                        <div
+                        <div id="erp-header-controls" v-cloak
                             style="text-align: right; font-size: 0.9em; color: #666; display: flex; align-items: center; justify-content: flex-end; gap: 10px;">
-                            <span id="erp-last-update"></span>
-                            <button id="btn-refresh-erp" title="새로고침" disabled
-                                style="cursor: pointer; background: none; border: none; font-size: 1.2em; opacity: 0.5;">↻</button>
+                            <span id="erp-last-update">{{ controls.lastUpdate }}</span>
+                            <button id="btn-refresh-erp" title="새로고침" :disabled="!controls.sessionReady"
+                                @click="refresh" :style="{ opacity: controls.sessionReady ? '1' : '0.5' }"
+                                style="cursor:pointer; background:none; border:none; font-size:1.2em;">↻</button>
                         </div>
                     </div>
                 </div>
@@ -378,7 +374,8 @@
                 <!-- Scrollable Content -->
                 <div class="view-content">
                     <div class="erp-container savable-ui" data-save-key="erpLocation">
-                        <div class="erp-compact-layout" id="erp-individual-container" v-cloak>
+                        <div id="erp-individual-container" v-cloak>
+                          <div class="erp-compact-layout" v-show="!controls.isBatchMode">
                             <!-- Row 1: Substation -->
                             <div class="erp-row">
                                 <div class="erp-label-col">변전소</div>
@@ -457,10 +454,12 @@
                                     </div>
                                 </div>
                             </div>
+                          </div>
                         </div>
 
                         <!-- Batch Mode Layout (Vue Managed) -->
-                        <div class="erp-batch-layout" id="erp-batch-container" style="display: none;">
+                        <div id="erp-batch-container" v-cloak>
+                          <div class="erp-batch-layout" v-show="controls.isBatchMode">
                             <div class="erp-batch-table">
                                 <div class="erp-batch-header-row" id="erp-batch-header">
                                     <div class="batch-col-header type-col">구분</div>
@@ -509,25 +508,30 @@
                                     </template>
                                 </div>
                             </div>
+                          </div>
                         </div>
                     </div>
                 </div>
 
                 <!-- Fixed Footer -->
                 <div class="view-footer">
-                    <div class="action-footer">
+                    <div class="action-footer" id="erp-footer-controls" v-cloak>
                         <div class="worker-format-toggle-container">
-                            <span class="toggle-label-text" id="lbl-format-summary">대표자 외 0명</span>
+                            <span class="toggle-label-text" id="lbl-format-summary"
+                                :class="{ 'bold-active': !controls.isListFormat }">대표자 외 0명</span>
                             <label class="toggle-switch">
                                 <input type="checkbox" id="toggle-worker-format" class="savable-ui"
-                                    data-save-key="workerFormat" onchange="updateToggleStyle()">
+                                    data-save-key="workerFormat" v-model="controls.isListFormat" @change="formatChanged">
                                 <span class="slider round"></span>
                             </label>
-                            <span class="toggle-label-text" id="lbl-format-list">전원 나열식</span>
+                            <span class="toggle-label-text" id="lbl-format-list"
+                                :class="{ 'bold-active': controls.isListFormat }">전원 나열식</span>
                         </div>
                         <div class="erp-action-buttons">
-                            <button class="secondary-btn" id="btn-erp-mode" onclick="toggleERPMode()">일괄모드 &gt;</button>
-                            <button class="primary-btn large-btn" onclick="openERPHandler()">시작</button>
+                            <button class="secondary-btn" id="btn-erp-mode" @click="toggleMode">
+                                {{ controls.isBatchMode ? '< 개별모드' : '일괄모드 >' }}
+                            </button>
+                            <button class="primary-btn large-btn" @click="start">시작</button>
                         </div>
                     </div>
                 </div>
@@ -757,6 +761,80 @@
                 </div>
             </div>
 
+            <div id="view-material-location" class="view-section" v-cloak>
+                <div class="view-header"><div class="header-row"><h1>적재위치조회</h1></div></div>
+                <div class="view-content material-content">
+                    <form class="material-search-block" @submit.prevent="search">
+                        <div class="material-location-control">
+                            <details class="material-location-ddl" ref="locationDropdown">
+                                <summary aria-label="저장위치 선택" :aria-disabled="state.loading">
+                                    <span id="material-location-summary">{{ selectionLabel }}</span><span aria-hidden="true">▾</span>
+                                </summary>
+                                <div class="material-location-options">
+                                    <div class="material-select-actions">
+                                        <button type="button" :disabled="state.loading" @click="selectAll">전체 선택</button>
+                                        <button type="button" :disabled="state.loading" @click="state.locations = []">선택 해제</button>
+                                    </div>
+                                    <label v-for="option in options" :key="option.value">
+                                        <input type="checkbox" :value="option.value" v-model="state.locations" :disabled="state.loading">
+                                        <span>{{ option.name }}</span>
+                                    </label>
+                                </div>
+                            </details>
+                        </div>
+                        <div class="material-keyword-control">
+                            <div class="material-keyword-row">
+                                <input id="material-keyword" aria-label="자재내역 검색어" type="search" v-model="state.keyword" maxlength="200"
+                                    :disabled="state.loading">
+                                <button type="submit" class="primary-btn" :disabled="state.loading || !state.locations.length">
+                                    {{ state.loading ? '조회 중…' : '검색' }}
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+                    <div class="material-result-status" aria-live="polite">
+                        <span v-if="state.error" class="material-error">{{ state.error }}</span>
+                        <span v-else-if="state.searched">검색 결과 {{ state.rows.length.toLocaleString() }}건</span>
+                    </div>
+                    <div class="material-table-wrap" :class="{ 'material-table-expanded': descriptionExtraWidth > 0 }" ref="tableWrapper" :aria-busy="state.loading">
+                        <table class="material-result-table" :style="tableStyle">
+                            <colgroup><col class="material-number-col"><col :style="descriptionColumnStyle"><col style="width: 78px"><col style="width: 94px"><col style="width: 58px"><col style="width: 58px"></colgroup>
+                            <thead><tr><th>번호</th><th ref="descriptionHeader" class="material-description-cell">자재내역<span class="material-column-resizer" role="separator" aria-label="자재내역 열 너비 조절" aria-orientation="vertical" tabindex="0"
+                                @pointerdown="startColumnResize" @pointermove="moveColumnResize" @pointerup="endColumnResize" @pointercancel="endColumnResize" @lostpointercapture="endColumnResize"
+                                @keydown.right.prevent="descriptionExtraWidth += 10" @keydown.left.prevent="descriptionExtraWidth = Math.max(0, descriptionExtraWidth - 10)"></span></th><th>분소</th><th>적재위치</th><th>신품</th><th>중고</th></tr></thead>
+                            <tbody>
+                                <tr v-for="row in state.rows" :key="row.material + ':' + row.location" tabindex="0"
+                                    @dblclick="openDetail(row)" @keydown.enter.prevent="openDetail(row)" aria-label="자재 상세 보기">
+                                    <td>{{ materialNumber(row.material) }}</td><td class="material-description-cell"><template v-for="(part, index) in keywordParts(row.description)" :key="index"><strong v-if="part.matched">{{ part.text }}</strong><span v-else>{{ part.text }}</span></template><span class="material-column-resizer" aria-hidden="true"
+                                        @dblclick.stop @pointerdown.stop="startColumnResize" @pointermove="moveColumnResize" @pointerup="endColumnResize" @pointercancel="endColumnResize" @lostpointercapture="endColumnResize"></span></td>
+                                    <td>{{ departmentName(row.location) }}</td><td>{{ row.bin || '' }}</td>
+                                    <td class="material-quantity">{{ quantity(row.newStock) }}</td>
+                                    <td class="material-quantity">{{ quantity(row.usedStock) }}</td>
+                                </tr>
+                                <tr v-if="!state.rows.length"><td colspan="6" class="material-empty">
+                                    {{ state.loading ? '조회 중…' : state.searched && !state.error ? '검색 결과가 없습니다.' : '조회 결과가 여기에 표시됩니다.' }}
+                                </td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <dialog ref="detailDialog" class="material-detail-dialog" aria-labelledby="material-detail-title" @close="state.detail = null"
+                    @pointerdown="onDetailPointerDown" @click="closeDetailOnBackdrop">
+                    <div class="material-detail-header">
+                        <h2 id="material-detail-title">자재 상세</h2>
+                        <button type="button" class="secondary-btn small" autofocus @click="$refs.detailDialog.close()">닫기</button>
+                    </div>
+                    <dl v-if="state.detail" class="material-detail-values">
+                        <dt>번호</dt><dd>{{ materialNumber(state.detail.material) }}</dd>
+                        <dt>자재내역</dt><dd><template v-for="(part, index) in keywordParts(state.detail.description)" :key="index"><strong v-if="part.matched">{{ part.text }}</strong><span v-else>{{ part.text }}</span></template></dd>
+                        <dt>분소</dt><dd>{{ departmentName(state.detail.location) }}</dd>
+                        <dt>적재위치</dt><dd>{{ state.detail.bin || '' }}</dd>
+                        <dt>신품</dt><dd>{{ quantity(state.detail.newStock) }}</dd>
+                        <dt>중고</dt><dd>{{ quantity(state.detail.usedStock) }}</dd>
+                    </dl>
+                </dialog>
+            </div>
+
             <!-- Vehicle Log View -->
             <div id="view-vehicle-log" class="view-section" v-cloak>
                 <div class="view-header">
@@ -820,7 +898,8 @@
                                 </div>
                             </div>
                             <div class="form-group">
-                                <button id="btn-approval-info" class="secondary-btn full-width" disabled
+                                <button id="btn-approval-info" class="secondary-btn full-width"
+                                    :disabled="!vehicle.sessionReady"
                                     style="margin-top: 10px; height: 40px;"
                                     @click="loadApproval">승인정보 불러오기</button>
                             </div>
@@ -854,10 +933,10 @@
         </main>
     </div>
 
-    <!-- Settings Overlay View (Hidden Initially) -->
-    <div id="settings-view" style="display: none;">
+    <!-- Settings Overlay View -->
+    <div id="settings-view" style="display: none;" v-cloak>
         <div class="settings-header">
-            <button class="back-btn" onclick="closeSettings()">
+            <button class="back-btn" @click="close">
                 <svg viewBox="0 0 24 24" width="24" height="24">
                     <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" fill="currentColor" />
                 </svg>
@@ -866,303 +945,287 @@
         </div>
 
         <div class="settings-body">
-            <!-- Settings Tabs Sidebar -->
             <div class="settings-sidebar">
-                <div class="tab-item active" onclick="switchSettingsTab('tab-user')">유저정보</div>
-                <div class="tab-item" onclick="switchSettingsTab('tab-preset')">일지프리셋</div>
-                <div class="tab-item" onclick="switchSettingsTab('tab-worker')">작업자</div>
-                <div class="tab-item" onclick="switchSettingsTab('tab-location')">작업장소</div>
-                <div class="tab-item" onclick="switchSettingsTab('tab-hotkey')">단축키</div>
-                <div class="tab-item" onclick="switchSettingsTab('tab-updates')">업데이트 내역</div>
+                <div class="tab-item" :class="{ active: settings.activeTab === 'tab-user' }"
+                    @click="selectTab('tab-user')">유저정보</div>
+                <div class="tab-item" :class="{ active: settings.activeTab === 'tab-preset' }"
+                    @click="selectTab('tab-preset')">일지프리셋</div>
+                <div class="tab-item" :class="{ active: settings.activeTab === 'tab-worker' }"
+                    @click="selectTab('tab-worker')">작업자</div>
+                <div class="tab-item" :class="{ active: settings.activeTab === 'tab-location' }"
+                    @click="selectTab('tab-location')">작업장소</div>
+                <div class="tab-item" :class="{ active: settings.activeTab === 'tab-hotkey' }"
+                    @click="selectTab('tab-hotkey')">단축키</div>
+                <div class="tab-item" :class="{ active: settings.activeTab === 'tab-updates' }"
+                    @click="selectTab('tab-updates')">업데이트 내역</div>
                 <div class="settings-cloud-actions">
-                    <button id="btn-import-settings" class="secondary-btn" onclick="importUserSettings()">설정 불러오기</button>
-                    <button id="btn-export-settings" class="primary-btn" onclick="exportUserSettings()">설정 내보내기</button>
+                    <button id="btn-import-settings" class="secondary-btn" :disabled="settings.cloudBusy"
+                        @click="importCloud">설정 불러오기</button>
+                    <button id="btn-export-settings" class="primary-btn" :disabled="settings.cloudBusy"
+                        @click="exportCloud">설정 내보내기</button>
                 </div>
             </div>
 
             <div class="settings-content-area">
-
-                <!-- Tab 1: User Info -->
-                <div id="tab-user" class="settings-tab-pane active">
+                <div id="tab-user" class="settings-tab-pane"
+                    :class="{ active: settings.activeTab === 'tab-user' }">
                     <h2>내 정보</h2>
-                    <div class="std-form-row"><label class="std-label fixed-70">이름</label><input type="text"
-                            id="user-name" class="std-input" readonly disabled></div>
-                    <div class="std-form-row"><label class="std-label fixed-70">사번</label><input type="text"
-                            id="user-id" class="std-input" readonly disabled></div>
+                    <div class="std-form-row"><label class="std-label fixed-70">이름</label>
+                        <input type="text" id="user-name" class="std-input" v-model="settings.profile.name" readonly disabled>
+                    </div>
+                    <div class="std-form-row"><label class="std-label fixed-70">사번</label>
+                        <input type="text" id="user-id" class="std-input" v-model="settings.profile.id" readonly disabled>
+                    </div>
                     <div class="std-form-row"><label class="std-label fixed-70">분소</label>
-                        <select id="user-dept" class="std-input">
-                            <option value="5111" data-codeval="">동래변전분소</option>
-                            <option value="5112" data-codeval="">전포변전분소</option>
-                            <option value="5113" data-codeval="">구포변전분소</option>
-                            <option value="5121" data-codeval="">신평전기분소</option>
-                            <option value="5122" data-codeval="">부산진전기분소</option>
-                            <option value="5123" data-codeval="">동래전기분소</option>
-                            <option value="5124" data-codeval="">노포전기분소</option>
-                            <option value="5125" data-codeval="">장산전기분소</option>
-                            <option value="5126" data-codeval="">광안전기분소</option>
-                            <option value="5127" data-codeval="">전포전기분소</option>
-                            <option value="5128" data-codeval="">구명전기분소</option>
-                            <option value="5129" data-codeval="2612021">호포전기분소</option>
-                            <option value="5130" data-codeval="">미남전기분소</option>
-                            <option value="5131" data-codeval="">대저전기분소</option>
-                            <option value="5132" data-codeval="">다대전기관리소</option>
-                            <option value="5133" data-codeval="">남양산전기관리소</option>
+                        <select id="user-dept" class="std-input" v-model="settings.profile.arbpl" @change="changed">
+                            <option v-for="dept in departments" :key="dept.value" :value="dept.value">{{ dept.name }}</option>
                         </select>
                     </div>
                     <div class="std-form-row"><label class="std-label fixed-70">근무조</label>
-                        <select id="user-team" class="std-input">
-                            <option>A조</option>
-                            <option>B조</option>
-                            <option>C조</option>
-                            <option>D조</option>
-                            <option>일근</option>
+                        <select id="user-team" class="std-input" v-model="settings.profile.team" @change="changed">
+                            <option v-for="team in teams" :key="team" :value="team">{{ team }}</option>
                         </select>
                     </div>
                     <hr>
                     <h3>비밀번호 관리</h3>
-                    <div class="std-form-row"><label class="std-label fixed-70">통합 PW</label><input type="password"
-                            id="user-webpw" class="std-input">
+                    <div class="std-form-row"><label class="std-label fixed-70">통합 PW</label>
+                        <input type="password" id="user-webpw" class="std-input" v-model="settings.profile.webPW" @input="changed">
                     </div>
-                    <div class="std-form-row"><label class="std-label fixed-70">2차 PW</label><input type="password"
-                            id="user-pw2" class="std-input" maxlength="6"></div>
-                    <div class="std-form-row"><label class="std-label fixed-70">SAP PW</label><input type="password"
-                            id="user-sappw" class="std-input">
+                    <div class="std-form-row"><label class="std-label fixed-70">2차 PW</label>
+                        <input type="password" id="user-pw2" class="std-input" maxlength="6"
+                            v-model="settings.profile.pw2" @input="changed">
+                    </div>
+                    <div class="std-form-row"><label class="std-label fixed-70">SAP PW</label>
+                        <input type="password" id="user-sappw" class="std-input" v-model="settings.profile.sapPW" @input="changed">
                     </div>
                 </div>
 
-                <!-- Tab 2: Workers -->
-                <div id="tab-worker" class="settings-tab-pane">
+                <div id="tab-worker" class="settings-tab-pane"
+                    :class="{ active: settings.activeTab === 'tab-worker' }">
                     <div class="tab-header">
                         <h2>분소원</h2>
-                        <!-- Headless Import Button -->
                         <button id="btn-import-workers" class="secondary-btn small"
-                            onclick="importWorkersFromHeadless()" disabled style="margin-right: 10px;">불러오기</button>
+                            :disabled="!settings.sessionControlsEnabled || settings.importingWorkers" @click="importWorkers" style="margin-right: 10px;">
+                            {{ settings.importingWorkers ? '불러오는 중...' : '불러오기' }}
+                        </button>
                     </div>
                     <div class="table-wrapper">
                         <table id="worker-table">
-                            <thead>
-                                <tr>
-                                    <th width="15%">이름</th>
-                                    <th width="15%">사번</th>
-                                    <th width="15%">근무조</th>
-                                    <th width="20%">전화번호</th>
-                                    <th width="10%">분소장</th>
-                                    <th width="15%">운전원</th>
-                                    <th width="10%">삭제</th>
+                            <thead><tr>
+                                <th width="15%">이름</th><th width="15%">사번</th><th width="15%">근무조</th>
+                                <th width="20%">전화번호</th><th width="10%">분소장</th><th width="15%">운전원</th>
+                                <th width="10%">삭제</th>
+                            </tr></thead>
+                            <tbody>
+                                <tr v-for="(worker, index) in settings.workers" :key="index">
+                                    <td><input type="text" v-model="worker.name" placeholder="이름" @input="changed"></td>
+                                    <td><input type="text" :value="worker.id" placeholder="사번" maxlength="6"
+                                        @input="workerIdInput(index, $event)"></td>
+                                    <td><select v-model="worker.team" @change="changed">
+                                        <option v-for="team in teams" :key="team" :value="team">{{ team }}</option>
+                                    </select></td>
+                                    <td><input type="text" :value="worker.phone" placeholder="   -    -    " maxlength="13"
+                                        @input="workerPhoneInput(index, $event)"></td>
+                                    <td class="center"><input type="checkbox" v-model="worker.isManager"
+                                        @change="managerChanged(index)"></td>
+                                    <td class="center"><select v-model="worker.driverRole" @change="driverChanged(index)">
+                                        <option value="-">-</option><option value="정">정</option><option value="부">부</option>
+                                    </select></td>
+                                    <td class="center"><button class="small-btn danger" @click="removeWorker(index)">X</button></td>
                                 </tr>
-                            </thead>
-                            <tbody></tbody>
+                            </tbody>
                         </table>
                     </div>
-                    <button class="add-row-btn" onclick="addWorkerRow()">+ 추가</button>
+                    <button class="add-row-btn" @click="addWorker">+ 추가</button>
                 </div>
 
-                <!-- Tab 3: Locations -->
-                <div id="tab-location" class="settings-tab-pane">
+                <div id="tab-location" class="settings-tab-pane"
+                    :class="{ active: settings.activeTab === 'tab-location' }">
                     <div class="tab-header" style="display:flex; justify-content:space-between; align-items:center;">
                         <h2>ERP점검</h2>
-                        <button id="btn-import-locations" class="secondary-btn small" onclick="importLocationsFromHeadless()" disabled style="margin-right: 10px;">불러오기</button>
+                        <button id="btn-import-locations" class="secondary-btn small"
+                            :disabled="!settings.sessionControlsEnabled || settings.importingLocations" @click="importLocations" style="margin-right: 10px;">
+                            {{ settings.importingLocations ? '불러오는 중...' : '불러오기' }}
+                        </button>
                     </div>
-                    <div style="font-size:14px; display: flex; align-items: center; justify-content: flex-end; white-space: nowrap; margin-bottom: 10px;">
+                    <div style="font-size:14px; display:flex; align-items:center; justify-content:flex-end; white-space:nowrap; margin-bottom:10px;">
                         <label style="margin-right:5px;">점검자 입력형식 : </label>
-                        <select id="erp-format-pref" style="padding:2px; width: 130px;"">
-                            <option value="summary">대표자 외 N명</option>
-                            <option value="list">전원 나열식</option>
+                        <select id="erp-format-pref" style="padding:2px; width:130px;"
+                            v-model="settings.profile.erpFormat" @change="changed">
+                            <option value="summary">대표자 외 N명</option><option value="list">전원 나열식</option>
                         </select>
                     </div>
                     <div class="table-wrapper">
                         <table id="location-table">
-                            <thead>
-                                <tr>
-                                    <th width="40%">점검장소</th>
-                                    <th width="20%">오더번호</th>
-                                    <th width="30%">구분</th>
-                                    <th width="10%">삭제</th>
+                            <thead><tr>
+                                <th width="40%">점검장소</th><th width="20%">오더번호</th>
+                                <th width="30%">구분</th><th width="10%">삭제</th>
+                            </tr></thead>
+                            <tbody>
+                                <tr v-for="(location, index) in settings.locations" :key="index">
+                                    <td><input type="text" v-model="location.name" placeholder="점검명" @input="changed"></td>
+                                    <td><input type="text" :value="location.order" placeholder="오더번호" maxlength="8"
+                                        @input="locationOrderInput(index, $event)"></td>
+                                    <td><select v-model="location.type" @change="changed">
+                                        <option v-for="type in locationTypes" :key="type" :value="type">{{ type }}</option>
+                                    </select></td>
+                                    <td class="center"><button class="small-btn danger" @click="removeLocation(index)">X</button></td>
                                 </tr>
-                            </thead>
-                            <tbody></tbody>
+                            </tbody>
                         </table>
                     </div>
-                    <button class="add-row-btn" onclick="addLocationRow()">+ 추가</button>
+                    <button class="add-row-btn" @click="addLocation">+ 추가</button>
                 </div>
 
-                <!-- Tab 4: Hotkeys -->
-                <div id="tab-hotkey" class="settings-tab-pane">
+                <div id="tab-hotkey" class="settings-tab-pane"
+                    :class="{ active: settings.activeTab === 'tab-hotkey' }">
                     <h2>단축키 설정</h2>
                     <div class="table-wrapper">
                         <table id="hotkey-table">
-                            <thead>
-                                <tr>
-                                    <th width="30%">기능</th>
-                                    <th width="25%">단축키</th>
-                                    <th width="35%">설명</th>
-                                    <th width="10%" class="center">활성</th>
+                            <thead><tr>
+                                <th width="30%">기능</th><th width="25%">단축키</th>
+                                <th width="35%">설명</th><th width="10%" class="center">활성</th>
+                            </tr></thead>
+                            <tbody>
+                                <tr v-for="hotkey in settings.hotkeys" :key="hotkey.action">
+                                    <td>{{ hotkey.actionName }}</td>
+                                    <td><template v-for="(part, index) in hotkeyParts(hotkey.key)" :key="part + index">
+                                        <span v-if="index > 0">+</span><kbd>{{ part }}</kbd>
+                                    </template></td>
+                                    <td class="desc-cell" :title="hotkey.desc">{{ hotkey.desc }}</td>
+                                    <td class="center"><input type="checkbox" v-model="hotkey.enabled" @change="changed"></td>
                                 </tr>
-                            </thead>
-                            <tbody></tbody>
+                            </tbody>
                         </table>
                     </div>
                 </div>
 
-                <!-- Tab 5: Presets -->
-                <!-- Tab 5: Presets (Daily Log Defaults) -->
-                <div id="tab-preset" class="settings-tab-pane">
+                <div id="tab-preset" class="settings-tab-pane"
+                    :class="{ active: settings.activeTab === 'tab-preset' }">
                     <h2>일지 프리셋 (기본값 설정)</h2>
-
-                    <!-- 1. Safety Management (4 Sets) -->
                     <div class="preset-section">
                         <h3>안전관리 (업무일지 기본값)</h3>
-                        <!-- Set 1: Day Morning -->
-                        <div class="std-form-row safety-set">
-                            <label class="std-label">주간 오전</label>
+                        <div class="std-form-row safety-set"
+                            v-for="(safe, index) in settings.dailyLogDefaults.safety" :key="index">
+                            <label class="std-label">{{ ['주간 오전', '주간 오후', '야간 저녁', '야간 새벽'][index] }}</label>
                             <div class="safety-inputs">
-                                <input type="text" id="fps-safe1-content" placeholder="내용" class="std-input">
+                                <input type="text" :id="'fps-safe' + (index + 1) + '-content'" placeholder="내용"
+                                    class="std-input" v-model="safe.content" @input="changed">
                                 <label class="std-label">시작</label>
-                                <input type="text" id="fps-safe1-start" placeholder="   :   "
-                                    class="std-input time-input" maxlength="5" oninput="formatTime(this)">
+                                <input type="text" :id="'fps-safe' + (index + 1) + '-start'" placeholder="   :   "
+                                    class="std-input time-input" maxlength="5" v-model="safe.start"
+                                    @input="formatTime(safe, 'start', $event)">
                                 <label class="std-label">종료</label>
-                                <input type="text" id="fps-safe1-end" placeholder="   :   " class="std-input time-input"
-                                    maxlength="5" oninput="formatTime(this)">
-                            </div>
-                        </div>
-                        <!-- Set 2: Day Afternoon -->
-                        <div class="std-form-row safety-set">
-                            <label class="std-label">주간 오후</label>
-                            <div class="safety-inputs">
-                                <input type="text" id="fps-safe2-content" placeholder="내용" class="std-input">
-                                <label class="std-label">시작</label>
-                                <input type="text" id="fps-safe2-start" placeholder="   :   "
-                                    class="std-input time-input" maxlength="5" oninput="formatTime(this)">
-                                <label class="std-label">종료</label>
-                                <input type="text" id="fps-safe2-end" placeholder="   :   " class="std-input time-input"
-                                    maxlength="5" oninput="formatTime(this)">
-                            </div>
-                        </div>
-                        <!-- Set 3: Night Evening -->
-                        <div class="std-form-row safety-set">
-                            <label class="std-label">야간 저녁</label>
-                            <div class="safety-inputs">
-                                <input type="text" id="fps-safe3-content" placeholder="내용" class="std-input">
-                                <label class="std-label">시작</label>
-                                <input type="text" id="fps-safe3-start" placeholder="   :   "
-                                    class="std-input time-input" maxlength="5" oninput="formatTime(this)">
-                                <label class="std-label">종료</label>
-                                <input type="text" id="fps-safe3-end" placeholder="   :   " class="std-input time-input"
-                                    maxlength="5" oninput="formatTime(this)">
-                            </div>
-                        </div>
-                        <!-- Set 4: Night Dawn -->
-                        <div class="std-form-row safety-set">
-                            <label class="std-label">야간 새벽</label>
-                            <div class="safety-inputs">
-                                <input type="text" id="fps-safe4-content" placeholder="내용" class="std-input">
-                                <label class="std-label">시작</label>
-                                <input type="text" id="fps-safe4-start" placeholder="   :   "
-                                    class="std-input time-input" maxlength="5" oninput="formatTime(this)">
-                                <label class="std-label">종료</label>
-                                <input type="text" id="fps-safe4-end" placeholder="   :   " class="std-input time-input"
-                                    maxlength="5" oninput="formatTime(this)">
+                                <input type="text" :id="'fps-safe' + (index + 1) + '-end'" placeholder="   :   "
+                                    class="std-input time-input" maxlength="5" v-model="safe.end"
+                                    @input="formatTime(safe, 'end', $event)">
                             </div>
                         </div>
                     </div>
 
-                    <!-- 2. Driver Fitness Check -->
                     <div class="preset-section">
                         <h3>운전적합성 검사</h3>
-                        <div class="std-form-row" style="align-items: center;">
-                            <label class="std-label" style="width: auto; margin-right: 15px;">검사 방법 기본값</label>
+                        <div class="std-form-row" style="align-items:center;">
+                            <label class="std-label" style="width:auto; margin-right:15px;">검사 방법 기본값</label>
                             <div class="toggle-group">
                                 <span>운전원 제외한 최선임자</span>
-                                <label class="toggle-switch">
-                                    <input type="checkbox" id="fps-driver-check-toggle" onchange="autoSaveSettings()">
-                                    <span class="slider round"></span>
-                                </label>
+                                <label class="toggle-switch"><input type="checkbox" id="fps-driver-check-toggle"
+                                    v-model="settings.dailyLogDefaults.driverCheck" @change="changed"><span class="slider round"></span></label>
                                 <span>운전원 상호 검사</span>
                             </div>
                         </div>
                     </div>
 
-                    <!-- 3. General Work -->
                     <div class="preset-section">
-                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 10px;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
                             <h3>일반업무 (기본값)</h3>
-                            <div class="toggle-group" style="margin-left: 20px;">
-                                <span id="lbl-gw-day" class="bold-active">주간</span>
-                                <label class="toggle-switch">
-                                    <input type="checkbox" id="fps-general-work-toggle" onchange="toggleGeneralWorkShift()">
-                                    <span class="slider round"></span>
-                                </label>
-                                <span id="lbl-gw-night">야간</span>
+                            <div class="toggle-group" style="margin-left:20px;">
+                                <span id="lbl-gw-day" :class="{ 'bold-active': settings.generalWorkShift === '주간' }">주간</span>
+                                <label class="toggle-switch"><input type="checkbox" id="fps-general-work-toggle"
+                                    :checked="settings.generalWorkShift === '야간'"
+                                    @change="settings.generalWorkShift = $event.target.checked ? '야간' : '주간'">
+                                    <span class="slider round"></span></label>
+                                <span id="lbl-gw-night" :class="{ 'bold-active': settings.generalWorkShift === '야간' }">야간</span>
                             </div>
                         </div>
                         <div class="table-wrapper">
                             <table id="general-work-table">
-                                <thead>
-                                    <tr>
-                                        <!-- 분류: 일상/특별 등 -->
-                                        <th width="15%">분류</th>
-                                        <th width="43%">내용</th>
-                                        <th width="12%">책임자</th> <!-- 사번/이름 저장 -->
-                                        <th width="10%">시작</th>
-                                        <th width="10%">종료</th>
-                                        <th width="10%">삭제</th>
+                                <thead><tr>
+                                    <th width="15%">분류</th><th width="43%">내용</th><th width="12%">책임자</th>
+                                    <th width="10%">시작</th><th width="10%">종료</th><th width="10%">삭제</th>
+                                </tr></thead>
+                                <tbody>
+                                    <tr v-for="(row, index) in visibleGeneralWork" :key="row.workType + ':' + index">
+                                        <td><select v-model="row.category" @change="changed">
+                                            <option v-for="category in workCategories" :key="category" :value="category">{{ category }}</option>
+                                        </select></td>
+                                        <td><input type="text" v-model="row.content" placeholder="내용" @input="changed"></td>
+                                        <td><input type="text" v-model="row.manager" placeholder="책임자" @input="changed"></td>
+                                        <td><input type="text" v-model="row.start" placeholder="   :   " maxlength="5"
+                                            class="time-input" @input="formatTime(row, 'start', $event)"></td>
+                                        <td><input type="text" v-model="row.end" placeholder="   :   " maxlength="5"
+                                            class="time-input" @input="formatTime(row, 'end', $event)"></td>
+                                        <td class="center"><button class="small-btn danger" @click="removeGeneralWork(row)">X</button></td>
                                     </tr>
-                                </thead>
-                                <tbody></tbody>
+                                </tbody>
                             </table>
                         </div>
-                        <button class="add-row-btn" onclick="addGeneralWorkRow()">+ 추가</button>
+                        <button class="add-row-btn" @click="addGeneralWork">+ 추가</button>
                     </div>
 
-                    <!-- 4. Auto Input Reservation -->
                     <div class="preset-section">
                         <h3>열차순회 자동입력 예약</h3>
                         <div class="std-form-row">
                             <label class="std-label">자동입력 시간</label>
                             <input type="text" id="fps-auto-input-time" placeholder="HH:mm" class="std-input time-input"
-                                maxlength="5" oninput="formatTime(this)" style="width: 100px;">
-                            <span style="font-size: 0.9em; color: #666; margin-left: 10px;">(설정된 시간에 '열차순회' 항목 자동
-                                생성)</span>
+                                maxlength="5" style="width:100px;" v-model="settings.dailyLogDefaults.autoInputTime"
+                                @input="formatTime(settings.dailyLogDefaults, 'autoInputTime', $event)">
+                            <span style="font-size:0.9em; color:#666; margin-left:10px;">(설정된 시간에 '열차순회' 항목 자동 생성)</span>
                         </div>
                     </div>
 
-                    <!-- 5. Safety Education -->
                     <div class="preset-section">
                         <h3>안전교육 (요일별 자동 입력)</h3>
                         <div class="std-form-row">
                             <label class="std-label">요일 선택</label>
-                            <select id="fps-safe-edu-day" class="std-input" style="width: 120px;"
-                                onchange="handleSafetyEduDayChange()">
-                                <option value="Mon">월요일</option>
-                                <option value="Tue">화요일</option>
-                                <option value="Wed">수요일</option>
-                                <option value="Thu">목요일</option>
-                                <option value="Fri">금요일</option>
-                                <option value="Sat">토요일</option>
-                                <option value="Sun">일요일</option>
+                            <select id="fps-safe-edu-day" class="std-input" style="width:120px;"
+                                v-model="settings.safetyEduDay">
+                                <option value="Mon">월요일</option><option value="Tue">화요일</option>
+                                <option value="Wed">수요일</option><option value="Thu">목요일</option>
+                                <option value="Fri">금요일</option><option value="Sat">토요일</option><option value="Sun">일요일</option>
                             </select>
                         </div>
                         <div class="std-form-row">
                             <label class="std-label">교육 내용</label>
                             <textarea id="fps-safe-edu-content" class="std-input full-width-input" rows="3"
-                                placeholder="해당 요일에 자동 입력될 안전교육 내용" oninput="saveSafetyEduContent()"></textarea>
+                                placeholder="해당 요일에 자동 입력될 안전교육 내용"
+                                v-model="settings.dailyLogDefaults.safetyEdu[settings.safetyEduDay]" @input="changed"></textarea>
                         </div>
                     </div>
-
                 </div>
 
-                <!-- Tab 6: Updates -->
-                <div id="tab-updates" class="settings-tab-pane">
+                <div id="tab-updates" class="settings-tab-pane"
+                    :class="{ active: settings.activeTab === 'tab-updates' }">
                     <h2>업데이트 내역</h2>
                     <div id="release-list">
-                        <!-- Populated by JS -->
-                        <div class="loading-spinner">불러오는 중...</div>
+                        <div v-if="settings.releases.loading" class="loading-spinner">불러오는 중...</div>
+                        <div v-else-if="settings.releases.error" style="color:red; text-align:center;">
+                            오류: {{ settings.releases.error }}
+                        </div>
+                        <div v-else-if="settings.releases.items.length === 0" style="text-align:center; padding:20px;">
+                            업데이트 내역이 없습니다.
+                        </div>
+                        <div v-for="release in settings.releases.items" :key="release.tagName" class="release-item">
+                            <div class="release-header"><span class="release-ver">{{ release.tagName }}</span>
+                                <span class="release-date">{{ release.date }}</span></div>
+                            <div class="release-body" style="white-space:pre-wrap;">{{ release.body }}</div>
+                        </div>
                     </div>
                 </div>
-
             </div>
         </div>
     </div>
+
     <!-- ERP Individual Worker Selection Modal -->
     <div id="erp-worker-modal">
         <div class="modal-overlay" v-show="isOpen" v-cloak>
@@ -1197,7 +1260,8 @@
     </div>
 
     <!-- ERP Batch Confirmation Modal (Vue Managed) -->
-    <div id="erp-batch-modal" class="modal-overlay" style="display: none;">
+    <div id="erp-batch-modal" v-cloak>
+      <div class="modal-overlay" v-show="isOpen">
         <div class="modal-content">
             <div class="modal-header">
                 <h3>ERP 일괄모드</h3>
@@ -1223,39 +1287,62 @@
                 <button class="primary-btn full-width" @click="submitBatchTask()">시작</button>
             </div>
         </div>
+      </div>
     </div>
 
     <!-- Missing Password Warning Modal -->
-      <div id="missing-pw-modal" class="modal-overlay" style="display: none; z-index: 9999;">
+    <div id="missing-pw-modal" v-cloak>
+      <div class="modal-overlay" v-show="warning.visible" style="z-index: 9999;">
         <div class="modal-content" style="max-width: 500px;">
             <div class="modal-header">
                 <h3>비밀번호 미지정 안내</h3>
-                <button class="close-btn-icon" onclick="closeMissingPwModal()">&times;</button>
+                <button class="close-btn-icon" @click="close">&times;</button>
             </div>
             <div class="modal-body" style="padding-bottom: 10px;">
                 <div id="missing-pw-desc" style="font-size:14px; color:#333; line-height:1.5; margin-bottom:15px;">
-                    <!-- JS에서 동적 삽입 -->
+                    <b>{{ warning.types.join(', ') }}</b>가 지정되어 있지 않습니다.<br><br>
+                    다음 기능 사용이 제한됩니다:<br>
+                    <template v-if="warning.types.includes('통합pw')">
+                        - 자동로그인 단축키 사용불가<br>
+                        - 업무일지 및 선로출입관리 동작 시 수동로그인 필요<br>
+                    </template>
+                    <template v-if="warning.types.includes('SAPpw')">
+                        - ERP점검기능 사용 불가<br>
+                    </template>
                 </div>
                 <div style="font-size:14px; color:#333; margin-bottom:15px; font-weight: bold;">
                     해당 비밀번호를 지정하시겠습니까?
                 </div>
                 <div class="modal-option-row" style="margin-top:0;">
                     <label class="checkbox-label" style="display:flex; align-items:center; gap:8px;">
-                        <input type="checkbox" id="chk-hide-missing-pw">
+                        <input type="checkbox" id="chk-hide-missing-pw" v-model="warning.hideNextTime">
                         <span style="font-size:13px; color:#666;">다시 묻지 않음</span>
                     </label>
                 </div>
             </div>
             <div class="modal-footer" style="display: flex; gap: 10px;">
-                <button class="primary-btn" style="flex: 1;" onclick="goSetMissingPw()">예</button>
-                <button class="secondary-btn" style="flex: 1;" onclick="closeMissingPwModal()">아니오</button>
+                <button class="primary-btn" style="flex: 1;" @click="openSettings">예</button>
+                <button class="secondary-btn" style="flex: 1;" @click="close">아니오</button>
             </div>
         </div>
       </div>
+    </div>
 
       <!-- Session Status Overlay -->
-    <div id="session-status-overlay" class="session-overlay">
-        <span id="session-status-text">준비완료</span>
+    <div id="session-status-overlay" v-cloak>
+      <div class="session-overlay" :class="{ show: session.visible }"
+          :style="session.state === 'error' ? { backgroundColor: 'rgba(255, 235, 238, 0.95)', color: '#c62828' } : {}">
+          <span id="session-status-text">{{ session.text }}</span>
+      </div>
+    </div>
+
+    <div id="init-overlay" v-cloak>
+      <div v-show="overlay.visible" :style="{ opacity: overlay.fading ? '0' : '1' }"
+          style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(255,255,255,0.95); z-index:9999; display:flex; flex-direction:column; justify-content:center; align-items:center; transition:opacity 0.5s ease;">
+          <img src="img/loading.gif" alt="Loading..." style="width:64px; height:64px; margin-bottom:20px;">
+          <div style="font-size:18px; font-weight:bold; color:#333;">{{ overlay.message }}</div>
+          <div style="font-size:14px; color:#666; margin-top:10px;">잠시만 기다려주세요</div>
+      </div>
     </div>
 
     <!-- ERP FormList Firestore 실시간 구독용 SDK -->

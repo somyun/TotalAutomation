@@ -43,8 +43,8 @@ body {
 
 /* Add User Form (Separate View) */
 #add-user-view {
-    display: none;
-    /* Hidden by default */
+    /* 표시 여부는 Vue v-show(auth.view === 'add')가 인라인 display로 제어한다 */
+    display: flex;
     background: white;
     padding: 2rem;
     border-radius: 12px;
@@ -52,10 +52,6 @@ body {
     width: 450px;
     flex-direction: column;
     gap: 1rem;
-}
-
-#add-user-view.active {
-    display: flex;
 }
 
 .form-row {

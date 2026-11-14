@@ -2,36 +2,28 @@
 
 ; ==============================================================================
 ; TrayToast: 화면 우측 하단에 표시하는 자체 알림 상자
-; - Windows 기본 알림(TrayTip)은 버튼을 넣거나 내용을 바꿀 수 없어 직접 그린다.
-; - 알림을 클릭하면 같은 상자가 [열기] / [종료] 버튼 상자로 전환된다.
-; - 마우스가 올라가 있는 동안은 자동으로 닫히지 않는다.
+; - Windows 기본 알림(TrayTip)은 버튼을 넣을 수 없어 직접 그린다.
+; - 처음부터 [열기] / [종료] 버튼이 있는 상자로 표시한다.
+; - 아무 조작이 없으면 3초 뒤 닫히며, 마우스가 올라가 있는 동안은 닫지 않는다.
 ; ==============================================================================
 class TrayToast {
     static Gui := 0
-    static Expanded := false
     static Controls := Map()
     static OnOpen := 0
     static OnExit := 0
     static Fade := 0
     static AutoCloseFn := 0
     static FadeFn := 0
-    static MessageHooked := false
+    static DisplayMs := 3000
 
-    ; title: 굵은 제목, message: 안내 문구(클릭 시 버튼으로 바뀜)
-    static Show(title, message, onOpen, onExit) {
+    static Show(title, onOpen, onExit) {
         this.Close()
         this.OnOpen := onOpen
         this.OnExit := onExit
-        this.Expanded := false
 
         if !this.AutoCloseFn {
             this.AutoCloseFn := ObjBindMethod(this, "AutoClose")
             this.FadeFn := ObjBindMethod(this, "FadeStep")
-        }
-        if !this.MessageHooked {
-            ; 상자 빈 공간(배경) 클릭도 전환으로 처리한다.
-            OnMessage(0x201, ObjBindMethod(this, "OnBackgroundClick"))
-            this.MessageHooked := true
         }
 
         dark := this.IsDarkTheme()
@@ -53,17 +45,11 @@ class TrayToast {
         c["close"] := g.AddText("x+0 yp w34 Right BackgroundTrans", "✕")
         g.SetFont("s11 bold c" fg)
         c["title"] := g.AddText("xm y+8 w304 BackgroundTrans", title)
-        g.SetFont("s9 norm c" sub)
-        c["message"] := g.AddText("xm y+6 w304 BackgroundTrans", message)
-
-        ; 전환 후 버튼: 안내 문구 자리에 표시한다.
         g.SetFont("s10 norm c" accentFg)
-        c["open"] := g.AddText("xm yp w148 h34 Center 0x200 Hidden Background" accentBg, "열기")
+        c["open"] := g.AddText("xm y+10 w148 h34 Center 0x200 Background" accentBg, "열기")
         g.SetFont("s10 norm c" fg)
-        c["exit"] := g.AddText("x+8 yp w148 h34 Center 0x200 Hidden Background" secondaryBg, "종료")
+        c["exit"] := g.AddText("x+8 yp w148 h34 Center 0x200 Background" secondaryBg, "종료")
 
-        for name in ["app", "title", "message"]
-            c[name].OnEvent("Click", (*) => this.Expand())
         c["close"].OnEvent("Click", (*) => this.Close())
         c["open"].OnEvent("Click", (*) => this.Invoke("open"))
         c["exit"].OnEvent("Click", (*) => this.Invoke("exit"))
@@ -78,21 +64,7 @@ class TrayToast {
         g.Show("NoActivate")
         this.Fade := 0
         SetTimer(this.FadeFn, 15)
-        SetTimer(this.AutoCloseFn, -6000)
-    }
-
-    ; 알림 상자를 열기/종료 버튼 상자로 전환한다.
-    static Expand() {
-        if !this.Gui || this.Expanded
-            return
-        this.Expanded := true
-        c := this.Controls
-        c["message"].Visible := false
-        c["open"].Visible := true
-        c["exit"].Visible := true
-        this.Gui.Show("NoActivate AutoSize")
-        this.Place()
-        SetTimer(this.AutoCloseFn, -10000)
+        SetTimer(this.AutoCloseFn, -this.DisplayMs)
     }
 
     static Invoke(action) {
@@ -112,17 +84,16 @@ class TrayToast {
             this.Gui := 0
         }
         this.Controls := Map()
-        this.Expanded := false
     }
 
     static AutoClose() {
         if !this.Gui
             return
-        ; 마우스가 상자 위에 있으면 닫지 않고 다시 대기한다.
+        ; 마우스가 상자 위에 있으면 닫지 않고 1초 뒤 다시 확인한다.
         try {
             MouseGetPos(, , &hoverHwnd)
             if (hoverHwnd = this.Gui.Hwnd) {
-                SetTimer(this.AutoCloseFn, -2000)
+                SetTimer(this.AutoCloseFn, -1000)
                 return
             }
         }
@@ -140,14 +111,7 @@ class TrayToast {
             SetTimer(this.FadeFn, 0)
     }
 
-    static OnBackgroundClick(wParam, lParam, msg, hwnd) {
-        if this.Gui && hwnd = this.Gui.Hwnd && !this.Expanded {
-            this.Expand()
-            return 0
-        }
-    }
-
-    ; 작업 표시줄 위, 화면 우측 하단에 배치한다(하단 기준 고정).
+    ; 작업 표시줄 위, 화면 우측 하단에 배치한다.
     static Place() {
         if !this.Gui
             return

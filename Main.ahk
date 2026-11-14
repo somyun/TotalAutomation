@@ -320,10 +320,8 @@ OnWindowClose(*) {
         OnExitApp()
     }
     MainGui.Hide()
-    ; Windows 기본 알림 대신 클릭 시 열기/종료 버튼으로 전환되는 자체 알림 상자를 표시한다.
-    TrayToast.Show("시스템 트레이에서 실행 중입니다",
-        "이 알림을 클릭하면 열기/종료를 선택할 수 있습니다.",
-        RestoreWindow, OnExitApp)
+    ; Windows 기본 알림 대신 열기/종료 버튼이 있는 자체 알림 상자를 바로 표시한다(3초 후 자동 닫힘).
+    TrayToast.Show("시스템 트레이에서 실행 중입니다", RestoreWindow, OnExitApp)
 }
 
 RestoreWindow(*) {

@@ -43,6 +43,7 @@ SetTitleMatchMode 2
 #Include "Lib\Chrome.ahk"
 #Include "Lib\OCR.ahk"
 #Include "Lib\Gdip_All.ahk"
+#Include "Lib\TrayToast.ahk"
 
 #Include "세션관리.ahk"
 #Include "단축기능.ahk"
@@ -64,14 +65,14 @@ SetTitleMatchMode 2
 ; ==============================================================================
 ; 컴파일러 지시문
 ; ==============================================================================
-;@Ahk2Exe-SetVersion 3.6.2.0
-;@Ahk2Exe-SetProductVersion v3.6.2
+;@Ahk2Exe-SetVersion 3.6.3.0
+;@Ahk2Exe-SetProductVersion v3.6.3
 ;@Ahk2Exe-SetDescription 통합자동화
 ; ==============================================================================
 ; ==============================================================================
 ; 초기화
 ; ==============================================================================
-global AppVersion := "v3.6.2"
+global AppVersion := "v3.6.3"
 global wvc := ""
 global wv := ""
 global MainGui := ""
@@ -319,23 +320,19 @@ OnWindowClose(*) {
         OnExitApp()
     }
     MainGui.Hide()
-    TrayTip "시스템 트레이에서 실행 중입니다", "통합자동화", 1
+    ; Windows 기본 알림 대신 클릭 시 열기/종료 버튼으로 전환되는 자체 알림 상자를 표시한다.
+    TrayToast.Show("시스템 트레이에서 실행 중입니다",
+        "이 알림을 클릭하면 열기/종료를 선택할 수 있습니다.",
+        RestoreWindow, OnExitApp)
 }
 
 RestoreWindow(*) {
+    TrayToast.Close()
     MainGui.Show()
     WinActivate("ahk_id " MainGui.Hwnd)
     try wv.PostWebMessageAsJson('{"type": "requireAuth"}')
 }
 OnMessage(0x8500, RestoreWindow)
-
-; 트레이 알림(풍선/토스트)을 클릭하면 트레이 메뉴(열기/종료)를 표시한다.
-; 0x404 = AHK_NOTIFYICON, lParam 0x405 = NIN_BALLOONUSERCLICK
-OnTrayNotify(wParam, lParam, msg, hwnd) {
-    if ((lParam & 0xFFFF) = 0x405)
-        SetTimer(() => A_TrayMenu.Show(), -1)
-}
-OnMessage(0x404, OnTrayNotify)
 
 ; 2. 메인 창
 ShowMainWindow()

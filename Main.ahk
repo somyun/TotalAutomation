@@ -64,14 +64,14 @@ SetTitleMatchMode 2
 ; ==============================================================================
 ; 컴파일러 지시문
 ; ==============================================================================
-;@Ahk2Exe-SetVersion 3.6.1.0
-;@Ahk2Exe-SetProductVersion v3.6.1
+;@Ahk2Exe-SetVersion 3.6.2.0
+;@Ahk2Exe-SetProductVersion v3.6.2
 ;@Ahk2Exe-SetDescription 통합자동화
 ; ==============================================================================
 ; ==============================================================================
 ; 초기화
 ; ==============================================================================
-global AppVersion := "v3.6.1"
+global AppVersion := "v3.6.2"
 global wvc := ""
 global wv := ""
 global MainGui := ""
@@ -328,6 +328,14 @@ RestoreWindow(*) {
     try wv.PostWebMessageAsJson('{"type": "requireAuth"}')
 }
 OnMessage(0x8500, RestoreWindow)
+
+; 트레이 알림(풍선/토스트)을 클릭하면 트레이 메뉴(열기/종료)를 표시한다.
+; 0x404 = AHK_NOTIFYICON, lParam 0x405 = NIN_BALLOONUSERCLICK
+OnTrayNotify(wParam, lParam, msg, hwnd) {
+    if ((lParam & 0xFFFF) = 0x405)
+        SetTimer(() => A_TrayMenu.Show(), -1)
+}
+OnMessage(0x404, OnTrayNotify)
 
 ; 2. 메인 창
 ShowMainWindow()

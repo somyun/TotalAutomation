@@ -276,7 +276,10 @@ class SessionManager {
         this.State := "error"
         LogDebug("통합 세션 오류: " message)
         BackgroundProcessManager.SendInput("SESSION_SAVED")
-        this.NotifyState("error", message)
+        displayMessage := RegExReplace(message, "^(PASSWORD_CHANGE_REQUIRED|PORTAL_LOCKED):\s*")
+        this.NotifyState("error", displayMessage)
+        if (InStr(message, "PASSWORD_CHANGE_REQUIRED:") = 1)
+            SetTimer(ObjBindMethod(this, "PromptPasswordChange", displayMessage), -100)
 
         callbacks := this.ErrorCallbacks
         this.ReadyCallbacks := []
@@ -286,6 +289,29 @@ class SessionManager {
             catch
                 continue
         }
+    }
+
+    ; 포털이 주기적 비밀번호 변경(1차/2차)을 요구하면 안내 후 브라우저로 통합포털 로그인 페이지를 열고 종료한다.
+    ; 비밀번호 변경은 사용자가 포털 화면에서 직접 수행하며, 프로그램은 변경 요청을 대신 보내지 않는다.
+    static PromptPasswordChange(detail) {
+        static handled := false
+        if handled
+            return
+        handled := true
+
+        LogDebug("비밀번호 변경 요청 감지: 안내 후 통합포털 로그인 페이지를 열고 종료합니다.")
+        MsgBox(detail
+            . "`n`n확인을 누르면 브라우저에서 통합포털 로그인 페이지를 엽니다."
+            . "`n포털에서 비밀번호를 변경한 뒤, 프로그램을 다시 실행해"
+            . "`n설정에서 변경된 비밀번호로 수정해 주세요."
+            . "`n`n프로그램은 자동으로 종료됩니다.",
+            "비밀번호 변경 안내", "Iconi 0x40000")
+
+        portalUrl := SessionAuthenticator.BasePortal "/user/login.face?destination=%2Fportal%2F"
+        try Run(portalUrl)
+        catch as err
+            LogDebug("통합포털 로그인 페이지 열기 실패: " err.Message)
+        OnExitApp()
     }
 
     static NotifyState(state, message := "") {

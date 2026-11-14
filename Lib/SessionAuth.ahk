@@ -314,8 +314,7 @@ class SessionAuthenticator {
             throw Error("포털 1차 사용자 확인에 실패했습니다.")
 
         checkLogin := session.Request("POST", this.BasePortal "/user/checkLogin.face", firstJson, ajaxHeaders)
-        if !RegExMatch(checkLogin.Text, "i)" Chr(34) "str" Chr(34) "\s*:\s*" Chr(34) "success" Chr(34))
-            throw Error("포털 1차 비밀번호 확인에 실패했습니다.")
+        this.EnsureFirstLoginSuccess(checkLogin.Text)
 
         secondJson := JSON.stringify(Map("userId", credentials["사번"], "secondpwd", credentials["2차비번"]))
         secondLogin := session.Request("POST", this.BasePortal "/user/secondLoginYn.face", secondJson, ajaxHeaders)
@@ -340,6 +339,44 @@ class SessionAuthenticator {
         if !session.HasCookieForUrl("https://sso.humetro.busan.kr/sso/pmi-sso2.jsp", "JSESSIONID")
             throw Error("중앙 SSO 세션을 받지 못했습니다.")
         LogDebug("포털 및 중앙 SSO 로그인 성공")
+    }
+
+    ; 포털 checkLogin.face 응답(JSON: str/fail/secfail)을 포털 로그인 화면(loginAjax.js)과 같은 기준으로 분류한다.
+    ; 비밀번호 변경이 필요한 상태는 PASSWORD_CHANGE_REQUIRED 접두어로 구분해 Main이 안내 후 포털을 열 수 있게 한다.
+    static EnsureFirstLoginSuccess(responseText) {
+        status := ""
+        fail := 0
+        secfail := 0
+        try {
+            result := JSON.parse(responseText)
+            if IsObject(result) {
+                status := result.Has("str") ? String(result["str"]) : ""
+                fail := result.Has("fail") && IsNumber(result["fail"]) ? Integer(result["fail"]) : 0
+                secfail := result.Has("secfail") && IsNumber(result["secfail"]) ? Integer(result["secfail"]) : 0
+            }
+        } catch {
+            if RegExMatch(responseText, "i)" Chr(34) "str" Chr(34) "\s*:\s*" Chr(34) "(\w+)" Chr(34), &m)
+                status := m[1]
+        }
+        LogDebug("포털 1차 로그인 응답 상태: " (status = "" ? "(없음)" : status))
+
+        if (fail >= 5 || secfail >= 5)
+            throw Error("PORTAL_LOCKED: 비밀번호 오류 5회 초과로 포털 로그인이 제한되었습니다. 통합포털에서 비밀번호를 초기화해 주세요.")
+        switch status {
+            case "success":
+                return
+            case "firstChange":
+                throw Error("PASSWORD_CHANGE_REQUIRED: 통합포털 1차 비밀번호 변경 주기가 도래했습니다.")
+            case "secondChange":
+                throw Error("PASSWORD_CHANGE_REQUIRED: 통합포털 2차 비밀번호 변경 주기가 도래했습니다.")
+            case "firstno":
+                throw Error("PASSWORD_CHANGE_REQUIRED: 통합포털 임시 비밀번호를 새 비밀번호로 변경해야 합니다.")
+            case "secondno":
+                throw Error("PASSWORD_CHANGE_REQUIRED: 통합포털 2차 비밀번호 설정이 필요합니다.")
+            case "wrongpwd":
+                throw Error("포털 1차 비밀번호가 일치하지 않습니다.")
+        }
+        throw Error("포털 1차 비밀번호 확인에 실패했습니다.")
     }
 
     static PrepareMisSession(session, employeeId) {

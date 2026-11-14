@@ -652,11 +652,19 @@ OnWebMessage(sender, args) {
                 payload := Map("type", "loginFail", "message", "이미 존재하는 사번입니다.")
                 wv.PostWebMessageAsJson(JSON.stringify(payload))
             } else {
-                ConfigManager.Config["users"][newID] := Map(
+                userRoot := Map(
                     "profile", newUser,
                     "hotkeys", [],
                     "presets", Map()
                 )
+                ; UI가 함께 보낸 새 사용자 기본값(단축키, 일지 프리셋)만 반영한다.
+                if (msg.Has("defaults") && msg["defaults"] is Map) {
+                    for key in ["hotkeys", "dailyLogDefaults"] {
+                        if msg["defaults"].Has(key)
+                            userRoot[key] := msg["defaults"][key]
+                    }
+                }
+                ConfigManager.Config["users"][newID] := userRoot
                 ConfigManager.Save()
 
                 profiles := ConfigManager.GetProfiles()
@@ -817,7 +825,9 @@ OnWebMessage(sender, args) {
             LogDebug("작업장소 조회 실패: " e.Message)
             wv.PostWebMessageAsJson(JSON.stringify(Map("type", "locationImportFailed",
                 "employeeId", employeeId, "requestId", requestId)))
-            MsgBox("작업장소 조회 실패: " e.Message, "작업장소 불러오기 오류", "Iconx")
+            ; 로그인 직후 자동 조회는 실패해도 알림 없이 다음 로그인에서 다시 시도한다.
+            if !(msg.Has("automatic") && msg["automatic"])
+                MsgBox("작업장소 조회 실패: " e.Message, "작업장소 불러오기 오류", "Iconx")
         }
     }
     else if (command == "checkLocationOrders") {

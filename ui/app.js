@@ -362,6 +362,7 @@ function handleAhkMessage(msg) {
             // 최초 빈 값을 계속 캐시하지 않도록 명시적으로 갱신 신호를 보낸다.
             trackAccessState.workerListRevision += 1;
             configReadyUserId = selectedUserId;
+            ensureUserHotkeyDefaults();
             syncMaterialLocationDefaults();
             initPresets(); // Initialize Presets for Track/Vehicle Views
             if (document.getElementById('settings-view').style.display !== 'none') {
@@ -947,9 +948,56 @@ function submitNewUser() {
     const deptCodeval = department?.codeval || '';
 
     const newUser = { id, name, team, arbpl: dept, department: deptName, codeval: deptCodeval, webPW: webpw, pw2: pw2, sapPW: sappw };
-    sendMessageToAHK({ command: 'addUser', data: newUser });
+    sendMessageToAHK({ command: 'addUser', data: newUser, defaults: buildNewUserDefaults() });
 
     switchView('login');
+}
+
+// 새 사용자 등록 시 채워 넣는 설정 기본값.
+// 작업자·작업장소는 로그인 후 자동 조회하므로 여기서 지정하지 않는다.
+const NEW_USER_DAILY_LOG_DEFAULTS = Object.freeze({
+    safety: [
+        { content: '전기 및 변전설비 일일점검', start: '09:30', end: '11:30' },
+        { content: '전기 및 변전설비 점검, 기지구내 도보순회 점검', start: '13:30', end: '16:00' },
+        { content: '전차선로 열차 순회점검 및 모타카 점검', start: '18:30', end: '20:00' },
+        { content: '전차선로 점검', start: '01:00', end: '04:00' }
+    ],
+    driverCheck: false,
+    // 책임자는 분소마다 달라 비워 둔다.
+    generalWork: [
+        { workType: '주간', category: '점검업무', content: 'E/R 일일점검', manager: '', start: '09:30', end: '11:30' },
+        { workType: '주간', category: '점검업무', content: '- 고압반 각종 계기류의 지시상태 : 이상없음', manager: '', start: '09:30', end: '11:30' }
+    ],
+    safetyEdu: {
+        Mon: '안전보건 11대 수칙',
+        Tue: '전기원 안전수칙',
+        Wed: '일반전기작업 안전수칙',
+        Thu: '시설물 안전점검 수칙',
+        Fri: '작업장 내 정리 정돈 안전 수칙',
+        Sat: '사다리 작업 및 정전작업 요령',
+        Sun: '안전 확보 요강 및 기타 작업에 필요한 사항 등'
+    },
+    autoInputTime: ''
+});
+
+function buildDefaultHotkeys() {
+    return defaultHotkeys.map(item => ({ action: item.action, key: item.key, desc: item.desc, enabled: true }));
+}
+
+function buildNewUserDefaults() {
+    return {
+        hotkeys: buildDefaultHotkeys(),
+        dailyLogDefaults: JSON.parse(JSON.stringify(NEW_USER_DAILY_LOG_DEFAULTS))
+    };
+}
+
+// 단축키 목록이 비어 있으면 설정 화면에는 모두 켜진 것으로 보이지만 실제로는 등록되지 않는다.
+// 로그인 직후 기본 단축키를 저장해 화면 표시와 실제 동작을 맞춘다.
+function ensureUserHotkeyDefaults() {
+    const user = appConfig?.users?.[selectedUserId];
+    if (!user || (Array.isArray(user.hotkeys) && user.hotkeys.length)) return;
+    user.hotkeys = buildDefaultHotkeys();
+    sendMessageToAHK({ command: 'saveConfig', data: appConfig });
 }
 
 function resetAddUserForm() {
@@ -3466,7 +3514,15 @@ function processPendingLocationOrderCheck() {
     const locations = getLocationsForOrderCheck();
     const orders = [...new Set(locations.map(location => locationOrderKey(location.order)))]
         .filter(order => /^\d{1,12}$/.test(order));
-    if (!arbpl || !orders.length) return;
+    if (!arbpl) return;
+    if (!locations.length) {
+        // 등록된 작업장소가 하나도 없으면(최초 사용) SAP에서 조회해 채운다.
+        const requestId = `${Date.now()}-${Math.random()}`;
+        pendingLocationImport = { requestId, employeeId: selectedUserId, arbpl, automatic: true };
+        sendMessageToAHK({ command: 'importLocations', employeeId: selectedUserId, requestId, automatic: true });
+        return;
+    }
+    if (!orders.length) return;
     const requestId = `${Date.now()}-${Math.random()}`;
     pendingLocationOrderCheck = { requestId, employeeId: selectedUserId, arbpl, snapshot: JSON.stringify(locations) };
     sendMessageToAHK({ command: 'checkLocationOrders', requestId, employeeId: selectedUserId, orders });
@@ -3607,20 +3663,33 @@ async function handleLocationListUpdate(newLocations, employeeId, requestId) {
     try {
         if (pending.employeeId !== employeeId || selectedUserId !== employeeId) return;
         if (!Array.isArray(newLocations)) throw new Error('조회 결과 형식이 올바르지 않습니다.');
-        const snapshot = JSON.stringify(settingsState.locations);
-        const { next, additions } = planLocationImport(settingsState.locations, newLocations);
+        // 자동 조회는 설정 화면이 열려 있지 않을 수 있으므로 저장된 목록을 기준으로 한다.
+        const automatic = !!pending.automatic;
+        const currentLocations = () => automatic ? getLocationsForOrderCheck() : settingsState.locations;
+        const snapshot = JSON.stringify(currentLocations());
+        const { next, additions } = planLocationImport(currentLocations(), newLocations);
         if (!additions.length) {
-            showNativeMsgBox('추가할 작업장소가 없습니다.', '작업장소 불러오기');
+            if (!automatic) showNativeMsgBox('추가할 작업장소가 없습니다.', '작업장소 불러오기');
             return;
         }
         const describe = location => `${location.name || '(이름 없음)'} (${location.order || '오더번호 없음'}, ${location.type})`;
         const confirmed = await requestLocationImportConfirmation(
-            `새 작업장소 ${additions.length}건을 추가합니다.\n\n[추가]\n${additions.map(location => `• ${describe(location)}`).join('\n')}\n\n확인을 누르면 적용합니다.`
+            `${automatic ? '등록된 작업장소가 없어 SAP에서 조회한 ' : '새 '}작업장소 ${additions.length}건을 추가합니다.\n\n[추가]\n${additions.map(location => `• ${describe(location)}`).join('\n')}\n\n확인을 누르면 적용합니다.`
         );
         if (!confirmed || selectedUserId !== employeeId) return;
-        if (JSON.stringify(settingsState.locations) !== snapshot
+        if (JSON.stringify(currentLocations()) !== snapshot
             || appConfig.users?.[employeeId]?.profile?.arbpl !== pending.arbpl) {
             showNativeMsgBox('조회 중 설정이 변경되었습니다. 다시 불러와주세요.', '작업장소 불러오기');
+            return;
+        }
+        if (automatic) {
+            // 설정 화면을 열어 목록을 불러온 뒤 반영하고 즉시 저장한다.
+            if (document.getElementById('settings-view').style.display === 'none') switchView('settings');
+            switchSettingsTab('tab-location');
+            settingsState.locations = next;
+            if (saveTimeout) { clearTimeout(saveTimeout); saveTimeout = null; }
+            saveSettings();
+            refreshUI();
             return;
         }
         settingsState.locations = next;
